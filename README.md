@@ -1,4 +1,4 @@
-# Node-Based Automation Engine (NodeMacro)
+# 노드 기반 자동화 툴 (NodeMacro)
 
 ---
 

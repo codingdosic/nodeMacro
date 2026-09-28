@@ -14,6 +14,24 @@ NodeMacro는 브라우저에서 노드를 연결해 Windows 작업을 자동화�
 - 편집기 실행 및 저장 매크로 직접 실행용 배치 파일
 - ESC 비상 중단
 
+## 데모
+
+### 노드 편집기
+
+![NodeMacro 편집기](demo/main.gif)
+
+### 기본 매크로 실행
+
+![기본 매크로 실행](demo/basic.gif)
+
+### 이미지 조건 분기 실행
+
+![이미지 조건 분기 실행](demo/ifNode.gif)
+
+### 이미지 조건 분기 노드 구성
+
+![이미지 조건 분기 노드 구성](demo/ifNodeImg.png)
+
 ## 설치
 
 Python 3.10+와 Node.js가 필요합니다.

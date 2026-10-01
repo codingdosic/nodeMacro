@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import axios from 'axios';
+import { api } from './api';
+import { nodeLabel, t } from './i18n';
 
-const NodePalette = () => {
+const NodePalette = ({ uiLanguage }) => {
   const [nodeTypes, setNodeTypes] = useState([]);
 
   useEffect(() => {
-    axios.get('http://127.0.0.1:8000/api/nodes/types')
+    api.get('/nodes/types')
       .then(res => setNodeTypes(res.data))
       .catch(err => console.error("Failed to load node types", err));
   }, []);
@@ -18,16 +19,16 @@ const NodePalette = () => {
   };
 
   return (
-    <div className="palette-container">
-      <div className="palette-title">Nodes</div>
+    <div className="palette-container" data-language={uiLanguage}>
+      <div className="palette-title">{t('nodes')}</div>
       {nodeTypes.map((node) => (
         <div
           key={node.type}
           className="node-item"
-          onDragStart={(event) => onDragStart(event, node.type, node.label, node.schema)}
+          onDragStart={(event) => onDragStart(event, node.type, nodeLabel(node.type, node.label), node.schema)}
           draggable
         >
-          {node.label}
+          {nodeLabel(node.type, node.label)}
         </div>
       ))}
     </div>

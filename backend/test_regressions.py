@@ -1,3 +1,4 @@
+import os
 import unittest
 from unittest.mock import patch
 
@@ -5,7 +6,10 @@ from PIL import Image
 
 from backend.engine import state
 from backend.engine.executor import Executor
-from backend.nodes.action_nodes import CoordNode, ImageNode, WaitNode, WindowNode
+from backend.nodes.action_nodes import (
+    CoordNode, ImageNode, LaunchNode, MouseClickNode, MouseDragNode,
+    MouseScrollNode, WaitNode, WindowNode,
+)
 
 
 class RegressionTests(unittest.TestCase):
@@ -32,6 +36,23 @@ class RegressionTests(unittest.TestCase):
         state.stop_event.set()
         self.assertEqual(WaitNode("wait", {"ms": 60_000}).execute({}), "output_pin")
 
+    @patch("backend.nodes.action_nodes.pyautogui.click")
+    def test_middle_click(self, click):
+        MouseClickNode("mouse", {"button": "middle"}).execute({"target_pos": (10, 20)})
+        click.assert_called_once_with(10, 20, button="middle")
+
+    @patch("backend.nodes.action_nodes.pyautogui.scroll")
+    def test_windows_scroll_uses_wheel_delta(self, scroll):
+        with patch("backend.nodes.action_nodes.os.name", "nt"):
+            MouseScrollNode("scroll", {"amount": -8}).execute({})
+        scroll.assert_called_once_with(-960)
+
+    @patch("backend.nodes.action_nodes.pyautogui.dragTo")
+    @patch("backend.nodes.action_nodes.pyautogui.position", return_value=(0, 0))
+    def test_drag_preserves_button(self, _position, drag_to):
+        MouseDragNode("drag", {"button": "right", "duration": 0.4}).execute({"target_pos": (10, 20)})
+        drag_to.assert_called_once_with(10, 20, duration=0.4, button="right")
+
     @patch("backend.nodes.action_nodes._find_window")
     def test_window_relative_coordinate(self, find_window):
         find_window.return_value = ("Calculator", (200, 300, 1000, 900))
@@ -42,6 +63,31 @@ class RegressionTests(unittest.TestCase):
             {"x": 10, "y": 20, "relative_to_window": True},
         ).execute(macro_state)
         self.assertEqual(macro_state["target_pos"], (210, 320))
+
+    @patch("backend.nodes.action_nodes.os.startfile")
+    def test_launch_expands_environment_variable(self, startfile):
+        with patch.dict(os.environ, {"D5_TEST_APP": r"C:\Tools\demo.exe"}):
+            LaunchNode("launch", {"path": r"%D5_TEST_APP%", "wait_after": 0}).execute({})
+        startfile.assert_called_once_with(r"C:\Tools\demo.exe")
+
+    @patch("backend.nodes.action_nodes._find_window")
+    def test_window_waits_until_found(self, find_window):
+        find_window.side_effect = [None, ("Calculator", (1, 2, 3, 4))]
+        macro_state = {}
+        WindowNode("window", {"title": "Calc", "timeout": 1, "poll_interval": 0.05}).execute(macro_state)
+        self.assertEqual(macro_state["window_rect"], (1, 2, 3, 4))
+        self.assertEqual(find_window.call_count, 2)
+
+    @patch("backend.nodes.action_nodes._find_window", return_value=None)
+    def test_window_timeout_is_an_error(self, _find_window):
+        with self.assertRaisesRegex(RuntimeError, "창을 찾을 수 없습니다"):
+            WindowNode("window", {"title": "Missing", "timeout": 0}).execute({})
+
+    @patch("backend.nodes.action_nodes._find_window")
+    def test_window_wait_honors_stop(self, find_window):
+        state.stop_event.set()
+        self.assertEqual(WindowNode("window", {"title": "Anything"}).execute({}), "output_pin")
+        find_window.assert_not_called()
 
     def test_executor_recovers_after_node_error(self):
         class BrokenNode:
@@ -59,14 +105,30 @@ class RegressionTests(unittest.TestCase):
         executor.running = True
         executor._stop_requested = False
         node = BrokenNode()
-        executor._run_loop(node, {node.node_id: node}, [])
+        with patch.object(state, "update_execution") as update_execution:
+            executor._run_loop(node, {node.node_id: node}, [])
         self.assertFalse(executor.running)
+        update_execution.assert_any_call(None, "finished")
 
     def test_start_requires_start_node(self):
         executor = Executor.__new__(Executor)
         executor.running = False
         with patch.object(state, "update_status"):
             self.assertFalse(executor.start({}, []))
+
+    def test_executor_can_start_from_selected_node(self):
+        class Node:
+            node_type = "wait"
+
+            def __init__(self, node_id):
+                self.node_id = node_id
+
+        executor = Executor.__new__(Executor)
+        executor.running = False
+        nodes = {"chosen": Node("chosen")}
+        with patch("backend.engine.executor.threading.Thread") as thread:
+            self.assertTrue(executor.start(nodes, [], "chosen"))
+        self.assertIs(thread.call_args.kwargs["args"][0], nodes["chosen"])
 
 
 if __name__ == "__main__":

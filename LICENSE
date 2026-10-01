@@ -1,0 +1,26 @@
+D5 Macro Source-Available Notice
+
+Copyright (c) 2026 d051c. All rights reserved.
+
+The source code authored for D5 Macro is published for portfolio review,
+security review, and release transparency. Except for permissions granted by
+the GitHub Terms of Service for viewing and forking a public repository, no
+permission is granted to copy, use, modify, redistribute, sublicense, or sell
+that code or compiled versions of it without prior written permission from the
+copyright holder.
+
+A lawful recipient of an official D5 Macro binary may reproduce and modify the
+Application Code solely as necessary to replace, relink, or debug modifications
+to an LGPL-covered library included with that binary for the recipient's own
+use. Reverse engineering for that limited purpose is permitted. Nothing in
+this notice restricts rights granted by an applicable third-party license.
+
+Third-party components are licensed by their respective copyright holders
+under the terms identified in docs/THIRD_PARTY_NOTICES.md and the license texts
+distributed with official binaries. Those terms control for those components.
+
+THE SOFTWARE AND SOURCE CODE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO
+EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY ARISING FROM THE SOFTWARE OR ITS USE.

@@ -3,43 +3,65 @@ import sys
 import json
 import shutil
 import asyncio
-import base64
 import time
-from typing import List, Dict, Any
+import tempfile
+import secrets
+from typing import List, Dict
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from backend.nodes.action_nodes import (
-    StartNode, CoordNode, WaitNode, ImageNode, MouseClickNode,
+    StartNode, LaunchNode, CoordNode, WaitNode, ImageNode, MouseClickNode,
     LoopNode, IfNode, KeyboardNode, MouseMoveNode, MouseScrollNode, MouseDragNode,
     WindowNode,
 )
 from backend.engine.executor import Executor
+from backend.engine.recorder import Recorder
 from backend.engine import state
-
-app = FastAPI(title="NodeMacro API")
-
-# CORS setup
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+from backend.validation import validate_macro
+from backend.config import (
+    APP_ID, APP_NAME, APP_VERSION, CAPTURES_DIR, HOST, PACKAGE_DIR, PORT,
+    SCRIPT_FORMAT, SCRIPT_SCHEMA_VERSION, SCRIPTS_DIR, SESSION_TOKEN,
+    HOTKEY_CHOICES, SETTINGS, save_settings,
 )
 
-# Directories
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-SCRIPTS_DIR = os.path.join(BASE_DIR, "scripts")
-ASSETS_DIR = os.path.join(BASE_DIR, "assets")
+app = FastAPI(title=f"{APP_NAME} API", docs_url=None, redoc_url=None)
+recorder = Recorder()
 
-for d in [SCRIPTS_DIR, ASSETS_DIR]:
-    if not os.path.exists(d):
-        os.makedirs(d)
+BASE_DIR = str(PACKAGE_DIR)
+SCRIPTS_DIR = str(SCRIPTS_DIR)
+ASSETS_DIR = str(CAPTURES_DIR)
+ALLOWED_ORIGINS = {f"http://{HOST}:{PORT}", f"http://localhost:{PORT}"}
+if os.environ.get("D5MACRO_DEV") == "1":
+    ALLOWED_ORIGINS.update({"http://127.0.0.1:5173", "http://localhost:5173"})
+
+
+@app.middleware("http")
+async def local_request_guard(request: Request, call_next):
+    host = request.headers.get("host", "").split(":", 1)[0].lower()
+    if host not in {HOST, "localhost"}:
+        return JSONResponse({"status": "error", "message": "Invalid host"}, status_code=403)
+    protected = request.url.path.startswith(("/api/", "/media/", "/captures/"))
+    if protected and request.url.path != "/api/health":
+        origin = request.headers.get("origin")
+        if origin and origin not in ALLOWED_ORIGINS:
+            return JSONResponse({"status": "error", "message": "Invalid origin"}, status_code=403)
+        token = request.headers.get("x-d5-token") or request.cookies.get("d5_session")
+        if not secrets.compare_digest(token or "", SESSION_TOKEN):
+            return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=401)
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; "
+        "connect-src 'self' ws://127.0.0.1:8000 ws://localhost:8000; frame-ancestors 'none'"
+    )
+    return response
 
 
 def clear_assets_folder():
@@ -67,17 +89,20 @@ def _sanitize_script_name(raw_name: str) -> str:
     return name or "macro_1"
 
 
+def _version_tuple(value: str):
+    try:
+        return tuple(int(part) for part in str(value).split(".")[:3])
+    except ValueError:
+        return (0,)
+
+
 def _write_script_batch(script_folder: str, script_name: str):
-    payload = json.dumps(
-        {"path": f"{script_name}/{script_name}.json"},
-        ensure_ascii=True,
-    ).encode("utf-8")
-    encoded = base64.b64encode(payload).decode("ascii")
-    content = f"""@echo off
-cd /d "%~dp0\..\.."
-call NodeMacro.bat --no-browser
-python -c "import base64,urllib.request; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8000/api/scripts/run',data=base64.b64decode('{encoded}'),headers={{'Content-Type':'application/json'}})).read()"
-"""
+    if getattr(sys, "frozen", False):
+        command = f'"{sys.executable}"'
+    else:
+        launcher = os.path.join(BASE_DIR, "launcher.py")
+        command = f'"{sys.executable}" "{launcher}"'
+    content = f'@echo off\n{command} --run-script "%~dp0\\{script_name}.json"\n'
     batch_path = os.path.join(script_folder, f"{script_name}.bat")
     with open(batch_path, "w", encoding="utf-8", newline="") as file:
         file.write(content.replace("\n", "\r\n"))
@@ -93,22 +118,23 @@ def _resolve_image_source(image_path: str):
     if not path:
         return None
 
-    # http(s)://host/static/... → BASE_DIR 상대
+    # 브라우저 미리보기 URL은 scripts/ 또는 captures/ 아래로만 해석한다.
     if path.startswith("http://") or path.startswith("https://"):
-        marker = "/static/"
-        idx = path.find(marker)
-        if idx == -1:
+        if "/media/" in path:
+            path = os.path.join(SCRIPTS_DIR, path.split("/media/", 1)[1].split("?", 1)[0].replace("/", os.sep))
+        elif "/captures/" in path:
+            path = os.path.join(ASSETS_DIR, path.split("/captures/", 1)[1].split("?", 1)[0].replace("/", os.sep))
+        else:
             return None
-        rel = path[idx + len(marker):].split("?", 1)[0]
-        path = os.path.join(BASE_DIR, rel.replace("/", os.sep))
-    elif path.startswith("/static/"):
-        rel = path[len("/static/"):].split("?", 1)[0]
-        path = os.path.join(BASE_DIR, rel.replace("/", os.sep))
+    elif path.startswith("/media/"):
+        path = os.path.join(SCRIPTS_DIR, path[len("/media/"):].split("?", 1)[0].replace("/", os.sep))
+    elif path.startswith("/captures/"):
+        path = os.path.join(ASSETS_DIR, path[len("/captures/"):].split("?", 1)[0].replace("/", os.sep))
 
     if os.path.isabs(path):
         return path if os.path.isfile(path) else None
 
-    candidate = os.path.join(BASE_DIR, path.replace("/", os.sep))
+    candidate = os.path.join(SCRIPTS_DIR, path.replace("/", os.sep))
     if os.path.isfile(candidate):
         return candidate
     return None
@@ -207,11 +233,11 @@ def _attach_runtime_image_fields(macro_data: dict, script_rel_name: str, script_
 
         if os.path.isfile(abs_path):
             config["image_path"] = abs_path
-            config["image_url"] = f"http://127.0.0.1:8000/static/{url_rel}?t={stamp}"
+            config["image_url"] = f"/media/{url_rel.removeprefix('scripts/')}?t={stamp}"
         else:
             base = os.path.basename(rel)
             config["image_url"] = (
-                f"http://127.0.0.1:8000/static/scripts/{script_rel_name}/imgs/{base}?t={stamp}"
+                f"/media/{script_rel_name}/imgs/{base}?t={stamp}"
             )
     return macro_data
 
@@ -248,16 +274,22 @@ def _strip_non_serializable(macro_data: dict) -> dict:
             "sourceHandle": edge.get("sourceHandle"),
             "targetHandle": edge.get("targetHandle"),
         })
-    return {"nodes": nodes_out, "edges": edges_out}
+    return {
+        "format": SCRIPT_FORMAT,
+        "schema_version": SCRIPT_SCHEMA_VERSION,
+        "created_with": APP_VERSION,
+        "minimum_app_version": APP_VERSION,
+        "nodes": nodes_out,
+        "edges": edges_out,
+    }
 
-# Static files for images
-app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
+# 사용자 이미지 외에는 파일 시스템을 공개하지 않는다.
+app.mount("/media", StaticFiles(directory=SCRIPTS_DIR), name="script_media")
+app.mount("/captures", StaticFiles(directory=ASSETS_DIR), name="captures")
 
 # Static files for frontend build
 FRONTEND_DIST = os.path.join(BASE_DIR, "frontend", "dist")
 
-from fastapi.responses import FileResponse
-import fastapi.staticfiles
 import mimetypes
 
 mimetypes.add_type("application/javascript", ".js")
@@ -269,11 +301,20 @@ if os.path.exists(FRONTEND_DIST):
 
     @app.get("/")
     def serve_frontend_index():
-        return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
+        response = FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
+        response.set_cookie("d5_session", SESSION_TOKEN, httponly=True, samesite="strict")
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        return response
+
+    @app.get("/favicon.svg")
+    def serve_favicon():
+        return FileResponse(os.path.join(FRONTEND_DIST, "favicon.svg"))
 
 
 NODE_MAP = {
     "start": StartNode,
+    "launch": LaunchNode,
     "window": WindowNode,
     "click": CoordNode,
     "wait": WaitNode,
@@ -310,17 +351,6 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# Update state callback to use WebSocket broadcast
-def on_status_update(message):
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(manager.broadcast({"type": "status", "message": message}))
-    except RuntimeError:
-        # If no event loop in this thread, we can't broadcast easily,
-        # but asyncio.run_coroutine_threadsafe could be used if we had the loop reference.
-        # For simplicity in this macro engine, we'll try to find a way to dispatch it.
-        pass
-
 # We need the main event loop to dispatch events from executor thread
 main_loop = None
 
@@ -348,16 +378,57 @@ async def startup_event():
                 main_loop,
             )
 
+    def threadsafe_recorder_update(payload):
+        if main_loop and not main_loop.is_closed():
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast({"type": "recorder", **payload}),
+                main_loop,
+            )
+
     state.status_callback = threadsafe_status_update
     state.execution_callback = threadsafe_execution_update
+    recorder.callback = threadsafe_recorder_update
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    executor.close()
+    recorder.close()
+    state.stop_listeners()
 
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "running": executor.running}
+    return {
+        "status": "ok", "app": APP_ID, "version": APP_VERSION,
+        "running": executor.running, "recording": recorder.running,
+    }
+
+
+class SettingsRequest(BaseModel):
+    record_stop_key: str
+    panic_stop_key: str
+
+
+@app.get("/api/settings")
+def get_settings():
+    return {**SETTINGS, "hotkey_choices": HOTKEY_CHOICES}
+
+
+@app.post("/api/settings")
+def update_settings(req: SettingsRequest):
+    try:
+        return {**save_settings(req.model_dump()), "hotkey_choices": HOTKEY_CHOICES}
+    except ValueError as exc:
+        return JSONResponse({"status": "error", "message": str(exc)}, status_code=400)
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    origin = websocket.headers.get("origin")
+    token = websocket.cookies.get("d5_session") or websocket.headers.get("x-d5-token")
+    if origin not in ALLOWED_ORIGINS or not secrets.compare_digest(token or "", SESSION_TOKEN):
+        await websocket.close(code=1008)
+        return
     await manager.connect(websocket)
     try:
         while True:
@@ -381,11 +452,22 @@ def get_node_types():
 class MacroRunRequest(BaseModel):
     nodes: Dict[str, dict]  # e.g., {"node_1": {"type": "start", "config": {}}}
     links: List[dict]       # e.g., [{"source": "node_1", "sourceHandle": "output_pin", "target": "node_2", "targetHandle": "input_pin"}]
+    allow_warnings: bool = False
+    start_node_id: str | None = None
 
 @app.post("/api/macro/run")
 def run_macro(req: MacroRunRequest):
     if executor.running:
         return {"status": "error", "message": "Macro is already running"}
+    if recorder.running:
+        return {"status": "error", "message": "녹화 중에는 매크로를 실행할 수 없습니다."}
+
+    issues = validate_macro(req.nodes, req.links, NODE_MAP)
+    errors = [issue for issue in issues if issue["level"] == "error"]
+    if errors:
+        return {"status": "validation_error", "message": errors[0]["message"], "issues": issues}
+    if issues and not req.allow_warnings:
+        return {"status": "validation_warning", "message": issues[0]["message"], "issues": issues}
 
     all_nodes_dict = {}
     for n_id, n_data in req.nodes.items():
@@ -393,14 +475,32 @@ def run_macro(req: MacroRunRequest):
         if n_type in NODE_MAP:
             all_nodes_dict[n_id] = NODE_MAP[n_type](node_id=n_id, config=n_data.get("config", {}))
 
-    if not executor.start(all_nodes_dict, req.links):
+    if req.start_node_id and req.start_node_id not in all_nodes_dict:
+        return {"status": "error", "message": "선택한 시작 노드를 찾을 수 없습니다."}
+    if not executor.start(all_nodes_dict, req.links, req.start_node_id):
         return {"status": "error", "message": "Start node is required"}
-    return {"status": "started"}
+    return {"status": "started", "issues": issues}
 
 @app.post("/api/macro/stop")
 def stop_macro():
     executor.stop()
     return {"status": "stopped"}
+
+
+@app.post("/api/recorder/start")
+def start_recorder():
+    if executor.running:
+        return {"status": "error", "message": "매크로 실행 중에는 녹화할 수 없습니다."}
+    if not recorder.start(delay=3):
+        return {"status": "error", "message": "이미 녹화 중입니다."}
+    return {"status": "countdown", "seconds": 3}
+
+
+@app.post("/api/recorder/stop")
+def stop_recorder():
+    if not recorder.stop(drop_last_click=True):
+        return {"status": "error", "message": "녹화 중이 아닙니다."}
+    return {"status": "stopping"}
 
 @app.get("/api/scripts")
 def list_scripts():
@@ -412,6 +512,13 @@ def list_scripts():
                     rel_path = os.path.relpath(os.path.join(root, file), SCRIPTS_DIR)
                     script_files.append(rel_path.replace("\\", "/"))
     return script_files
+
+
+@app.post("/api/scripts/open-folder")
+def open_scripts_folder():
+    os.makedirs(SCRIPTS_DIR, exist_ok=True)
+    os.startfile(SCRIPTS_DIR)
+    return {"status": "opened"}
 
 @app.post("/api/scripts/save")
 async def save_script(request: Request):
@@ -435,8 +542,16 @@ async def save_script(request: Request):
     cleaned = _strip_non_serializable(data.get("macro_data") or {})
     cleaned = _bundle_images_for_save(cleaned, script_folder)
 
-    with open(save_path, "w", encoding="utf-8") as f:
-        json.dump(cleaned, f, indent=2, ensure_ascii=False)
+    if os.path.isfile(save_path):
+        shutil.copy2(save_path, f"{save_path}.bak")
+    fd, temp_path = tempfile.mkstemp(prefix=f".{raw_name}-", suffix=".tmp", dir=script_folder)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            json.dump(cleaned, file, indent=2, ensure_ascii=False)
+        os.replace(temp_path, save_path)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
 
     batch_path = None
     if generate_batch:
@@ -460,6 +575,7 @@ async def load_script(request: Request):
     """scripts/ 아래 상대 경로 전체로 로드. 예: macro_fgo/macro_fgo.json"""
     body = await request.json()
     rel_path = (body.get("path") or body.get("name") or "").strip().replace("\\", "/")
+    force = bool(body.get("force", False))
     if not rel_path:
         return {"status": "error", "message": "path required"}
 
@@ -488,12 +604,20 @@ async def load_script(request: Request):
     with open(load_path, "r", encoding="utf-8") as f:
         macro_data = json.load(f)
 
-    # React 포맷만 지원
-    if not isinstance(macro_data, dict) or "nodes" not in macro_data or "edges" not in macro_data:
+    if not isinstance(macro_data, dict) or macro_data.get("format") != SCRIPT_FORMAT:
         return {
             "status": "error",
-            "message": "React {nodes, edges} 포맷만 지원합니다. (옛 DPG 포맷 미지원)",
+            "message": "지원하는 D5 Macro 스크립트가 아닙니다.",
         }
+    schema_version = macro_data.get("schema_version")
+    minimum_version = macro_data.get("minimum_app_version", "0.0.0")
+    warning = None
+    if not isinstance(schema_version, int) or schema_version > SCRIPT_SCHEMA_VERSION:
+        warning = "이 스크립트는 더 새로운 파일 형식으로 저장되었습니다. 일부 설정이 올바르게 동작하지 않을 수 있습니다."
+    elif _version_tuple(minimum_version) > _version_tuple(APP_VERSION):
+        warning = f"이 스크립트에는 D5 Macro {minimum_version} 이상이 필요합니다."
+    if warning and not force:
+        return {"status": "warning", "message": warning, "path": rel_path}
 
     script_folder = os.path.dirname(load_path)
     script_rel_name = os.path.relpath(script_folder, SCRIPTS_DIR).replace("\\", "/")
@@ -532,7 +656,7 @@ async def run_saved_script(req: ScriptRunRequest):
         }
         for edge in macro.get("edges") or []
     ]
-    return run_macro(MacroRunRequest(nodes=nodes, links=links))
+    return run_macro(MacroRunRequest(nodes=nodes, links=links, allow_warnings=True))
 
 
 @app.post("/api/scripts/{name:path}/load")
@@ -553,12 +677,13 @@ def start_capture(req: CaptureRequest):
     from backend.engine import capture
 
     def on_captured(file_path):
-        import os
         try:
-            rel_path = os.path.relpath(file_path, BASE_DIR)
-            url_path = f"/static/{rel_path}".replace("\\", "/")
-        except:
-            url_path = file_path
+            rel_path = os.path.relpath(file_path, ASSETS_DIR)
+            if rel_path.startswith(".."):
+                raise ValueError("capture outside capture directory")
+            url_path = f"/captures/{rel_path}".replace("\\", "/")
+        except (OSError, ValueError):
+            url_path = ""
 
         if main_loop and not main_loop.is_closed():
             asyncio.run_coroutine_threadsafe(
@@ -661,4 +786,4 @@ def poll_coordinate(node_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("backend.main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run(app, host=HOST, port=PORT)

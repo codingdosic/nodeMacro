@@ -6,6 +6,7 @@ from pynput import keyboard
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from backend.engine import state
+from backend.config import get_setting
 
 class Executor:
     def __init__(self):
@@ -13,16 +14,17 @@ class Executor:
         self.thread = None
         self._stop_requested = False
 
-        # 비상 정지 리스너 시작 (ESC 키)
+        # 비상 정지 리스너 시작
         self.listener = keyboard.Listener(on_press=self._on_press)
         self.listener.start()
 
     def _on_press(self, key):
-        if key == keyboard.Key.esc:
-            print("비상 중단 요청됨 (ESC)")
+        name = getattr(key, "name", None) or getattr(key, "char", None)
+        if name and name.lower() == get_setting("panic_stop_key"):
+            print(f"비상 중단 요청됨 ({name.upper()})")
             self.stop()
 
-    def start(self, all_nodes_dict, all_links):
+    def start(self, all_nodes_dict, all_links, start_node_id=None):
         """
         all_nodes_dict: {node_id: NodeInstance}
         all_links: [{"source": source_id, "sourceHandle": pin_name, "target": target_id, "targetHandle": pin_name}, ...]
@@ -32,12 +34,9 @@ class Executor:
 
         state.update_status("매크로 준비 중...")
 
-        # Find start node
-        start_node = None
-        for node in all_nodes_dict.values():
-            if node.node_type == "start":
-                start_node = node
-                break
+        start_node = all_nodes_dict.get(start_node_id) if start_node_id else None
+        if not start_node:
+            start_node = next((node for node in all_nodes_dict.values() if node.node_type == "start"), None)
 
         if not start_node:
             state.update_status("시작 노드가 없습니다.")
@@ -59,6 +58,11 @@ class Executor:
         self._stop_requested = True
         state.stop_event.set()
         state.update_status("매크로 중단됨")
+
+    def close(self):
+        self.stop()
+        if self.listener:
+            self.listener.stop()
 
     def _run_loop(self, start_node, all_nodes_dict, all_links):
         current_node = None
@@ -86,6 +90,7 @@ class Executor:
             print(f"매크로 실행 오류: {exc}")
         finally:
             self.running = False
+            state.update_execution(None, "finished")
             print("매크로 실행이 종료되었습니다.")
 
     def _get_next_node(self, node, all_nodes_dict, all_links, specific_out_pin):

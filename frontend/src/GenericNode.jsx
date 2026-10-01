@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
-import axios from 'axios';
+import { api } from './api';
 import { subscribeNodeUpdate } from './nodeUpdateBus';
+import { fieldLabel, nodeLabel, optionLabel, t } from './i18n';
 
 const FieldControl = ({ field, keyName, value, onChange }) => {
   const [draftValue, setDraftValue] = useState(value);
@@ -40,7 +41,7 @@ const FieldControl = ({ field, keyName, value, onChange }) => {
         onChange={(e) => updateValue(e.target.value)}
       >
         {(field.options || []).map((opt) => (
-          <option key={opt} value={opt}>{opt}</option>
+          <option key={opt} value={opt}>{optionLabel(opt)}</option>
         ))}
       </select>
     );
@@ -54,7 +55,7 @@ const FieldControl = ({ field, keyName, value, onChange }) => {
           checked={Boolean(draftValue)}
           onChange={(e) => updateValue(e.target.checked)}
         />
-        <span>사용</span>
+        <span>{t('enabled')}</span>
       </label>
     );
   }
@@ -84,7 +85,7 @@ const FieldControl = ({ field, keyName, value, onChange }) => {
     return (
       <input
         type="number"
-        inputMode="numeric"
+        inputMode="decimal"
         step={field.step ?? 1}
         className="node-input nodrag"
         value={displayValue}
@@ -172,8 +173,11 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
   const [recordingKeys, setRecordingKeys] = useState(false);
   const [recordHint, setRecordHint] = useState('');
   const [pickingCoordinate, setPickingCoordinate] = useState(false);
+  const [capturePending, setCapturePending] = useState(null);
+  const [showHelp, setShowHelp] = useState(false);
   const pickBaselineRef = useRef(null);
   const pickPollRef = useRef(null);
+  const captureTimerRef = useRef(null);
   const previewImgRef = useRef(null);
 
   const stopCoordinatePoll = () => {
@@ -213,10 +217,16 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
         setPickingCoordinate(false);
         pickBaselineRef.current = null;
       }
+      if (payload.capturePending === false) {
+        setCapturePending(null);
+      }
     });
   }, [nodeId]);
 
-  useEffect(() => () => stopCoordinatePoll(), []);
+  useEffect(() => () => {
+    stopCoordinatePoll();
+    clearTimeout(captureTimerRef.current);
+  }, []);
 
   useEffect(() => {
     if (!pickingCoordinate || !pickBaselineRef.current) {
@@ -229,7 +239,7 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
     pickBaselineRef.current = null;
     stopCoordinatePoll();
     setPickingCoordinate(false);
-    setRecordHint(`좌표 저장됨: (${config.x}, ${config.y})`);
+    setRecordHint(`${t('coordinateSaved')}: (${config.x}, ${config.y})`);
   }, [meta.lastCoordPickId, config.x, config.y, pickingCoordinate]);
 
   const onChange = (key, value) => {
@@ -281,7 +291,7 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
         event.preventDefault();
         event.stopPropagation();
         setRecordingKeys(false);
-        setRecordHint('키 녹화 취소됨');
+        setRecordHint(t('keyCancelled'));
         return;
       }
       if (event.repeat) {
@@ -300,14 +310,14 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
           : String(prev.keys || '').split(',').map((item) => item.trim()).filter(Boolean);
         // 같은 modifier 중복 방지, 조합 순서는 유지
         if (currentKeys.includes(normalized)) {
-          setRecordHint(`기록 중: ${currentKeys.join(' + ')}`);
+          setRecordHint(`${t('recording')}: ${currentKeys.join(' + ')}`);
           return prev;
         }
         const nextKeys = [...currentKeys, normalized].filter(Boolean);
         if (data.onChange) {
           data.onChange(nodeId, 'keys', nextKeys);
         }
-        setRecordHint(`기록 중: ${nextKeys.join(' + ')} (버튼으로 확정)`);
+        setRecordHint(`${t('recording')}: ${nextKeys.join(' + ')}`);
         return { ...prev, keys: nextKeys };
       });
     };
@@ -317,19 +327,38 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
   }, [recordingKeys, data, nodeId]);
 
   const handleCapture = async (delay = 0) => {
-    setRecordHint(delay > 0 ? `캡처를 ${delay}초 후에 시작합니다.` : '캡처를 시작합니다.');
+    const pending = delay > 0 ? 'delayed' : 'instant';
+    setCapturePending(pending);
+    setRecordHint(delay > 0 ? `${delay}${t('secondsUntilCapture')}` : t('captureStarting'));
+    clearTimeout(captureTimerRef.current);
+    captureTimerRef.current = setTimeout(() => setCapturePending(null), delay * 1000 + 1000);
     try {
-      await axios.post('http://127.0.0.1:8000/api/capture/start', { node_id: nodeId, delay });
-    } catch (e) {
-      alert('캡처 요청 실패');
+      await api.post('/capture/start', { node_id: nodeId, delay });
+    } catch {
+      setCapturePending(null);
+      alert(t('captureFailed'));
     }
+  };
+
+  const handleImageReset = () => {
+    const patch = {
+      image_path: null,
+      image_url: null,
+      img_size: null,
+      search_region: null,
+      offset_x: 0,
+      offset_y: 0,
+    };
+    setConfig((prev) => ({ ...prev, ...patch }));
+    data.onChange?.(nodeId, patch);
+    setRecordHint('');
   };
 
   const handleRegionSelect = async () => {
     try {
-      await axios.post('http://127.0.0.1:8000/api/region/start', { node_id: nodeId });
-    } catch (e) {
-      alert('영역 선택 요청 실패');
+      await api.post('/region/start', { node_id: nodeId });
+    } catch {
+      alert(t('regionFailed'));
     }
   };
 
@@ -338,14 +367,14 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
       pickId: meta.lastCoordPickId ?? null,
     };
     setPickingCoordinate(true);
-    setRecordHint('클릭 또는 F8: 좌표 확정 / Esc: 취소');
+    setRecordHint(t('coordinatePickHint'));
     try {
-      await axios.post('http://127.0.0.1:8000/api/coordinate/start', { node_id: nodeId });
-    } catch (e) {
+      await api.post('/coordinate/start', { node_id: nodeId });
+    } catch {
       pickBaselineRef.current = null;
       setPickingCoordinate(false);
       setRecordHint('');
-      alert('좌표 선택 요청 실패');
+      alert(t('coordinateFailed'));
       return;
     }
 
@@ -356,11 +385,11 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
       if (Date.now() - startedAt > 120000) {
         stopCoordinatePoll();
         setPickingCoordinate(false);
-        setRecordHint('좌표 선택 시간 초과');
+        setRecordHint(t('coordinateTimeout'));
         return;
       }
       try {
-        const res = await axios.get(`http://127.0.0.1:8000/api/coordinate/poll/${nodeId}`);
+        const res = await api.get(`/coordinate/poll/${nodeId}`);
         if (!res.data?.done) {
           return;
         }
@@ -369,7 +398,7 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
         if (cancelled || x === undefined || y === undefined) {
           pickBaselineRef.current = null;
           setPickingCoordinate(false);
-          setRecordHint('좌표 선택 취소됨');
+          setRecordHint(t('coordinateCancelled'));
           return;
         }
         setConfig((prev) => ({ ...prev, x, y }));
@@ -378,8 +407,8 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
         }
         pickBaselineRef.current = null;
         setPickingCoordinate(false);
-        setRecordHint(`좌표 저장됨: (${x}, ${y})`);
-      } catch (e) {
+        setRecordHint(`${t('coordinateSaved')}: (${x}, ${y})`);
+      } catch {
         // 폴링 실패는 무시 (WS 경로가 있을 수 있음)
       }
     }, 200);
@@ -444,7 +473,7 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
       const keys = Array.isArray(config.keys)
         ? config.keys
         : String(config.keys || '').split(',').map((item) => item.trim()).filter(Boolean);
-      setRecordHint(keys.length ? `저장됨: ${keys.join(' + ')}` : '기록된 키 없음');
+      setRecordHint(keys.length ? `${t('saved')}: ${keys.join(' + ')}` : t('noKeys'));
       return;
     }
     const emptyKeys = [];
@@ -453,14 +482,15 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
       data.onChange(nodeId, 'keys', emptyKeys);
     }
     setRecordingKeys(true);
-    setRecordHint('키를 누른 뒤 버튼을 다시 눌러 확정하세요.');
+    setRecordHint(t('keyStartHint'));
   };
 
   const hasSchema = Object.keys(schema).length > 0;
   const isImageNode = data.type === 'image' || data.type === 'if';
   const isCoordinateNode = data.type === 'click';
   const isKeyboardNode = data.type === 'keyboard';
-  const keyboardMode = config.mode ?? schema?.mode?.default ?? '단축키';
+  const isWindowNode = data.type === 'window';
+  const keyboardMode = config.mode ?? schema?.mode?.default ?? 'hotkey';
   const showOffsetPicker = data.type === 'image' && Boolean(config.image_url);
   const recordedKeys = Array.isArray(config.keys)
     ? config.keys
@@ -482,28 +512,54 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
       <Handle type="target" position={Position.Left} isConnectable={isConnectable} id="input_pin" />
 
       <div className="node-header">
-        <span>{data.label}</span>
-        <span className="node-chip">{data.type}</span>
+        <span>{nodeLabel(data.type, data.label)}</span>
+        <div className="node-header-actions">
+          <button
+            type="button"
+            className="node-help-button nodrag"
+            title={t('nodeHelp')}
+            aria-expanded={showHelp}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              setShowHelp((value) => !value);
+            }}
+          >?</button>
+          <span className="node-chip">{data.type}</span>
+        </div>
       </div>
 
       <div className="node-body nodrag nowheel">
+        {showHelp && (
+          <div className="node-help-panel">
+            <strong>{t('usage')}</strong>
+            <span>{t(`help_${data.type}`)}</span>
+            {Object.keys(schema).length > 0 && (
+              <small>
+                {t('defaults')}: {Object.entries(schema).map(([key, field]) => (
+                  `${fieldLabel(key, field.label || key)}=${optionLabel(field.default ?? '-')}`
+                )).join(' · ')}
+              </small>
+            )}
+          </div>
+        )}
         {hasSchema && (
           <div className="node-section">
-            <div className="node-section-title">설정</div>
+            <div className="node-section-title">{t('settings')}</div>
             {Object.keys(schema).map((key) => {
               const field = schema[key];
               if (isKeyboardNode && key === 'keys') {
                 return null;
               }
-              if (isKeyboardNode && key === 'hangul_typewrite' && keyboardMode !== '문자열') {
+              if (isKeyboardNode && key === 'hangul_typewrite' && keyboardMode !== 'text') {
                 return null;
               }
-              if (isKeyboardNode && (key === 'string' || key === 'interval') && keyboardMode !== '문자열') {
+              if (isKeyboardNode && (key === 'string' || key === 'interval') && keyboardMode !== 'text') {
                 return null;
               }
               return (
                 <div key={key} className="node-field">
-                  <div className="node-label">{field.label || key}</div>
+                  <div className="node-label">{fieldLabel(key, field.label || key)}</div>
                   <FieldControl field={field} keyName={key} value={getFieldValue(key, field)} onChange={onChange} />
                 </div>
               );
@@ -511,15 +567,17 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
           </div>
         )}
 
+        {isWindowNode && <div className="node-hint">{t('windowNodeHint')}</div>}
+
         {isCoordinateNode && (
           <div className="node-section">
-            <div className="node-section-title">좌표</div>
+            <div className="node-section-title">{t('coordinates')}</div>
             <button type="button" className="node-button nodrag" onClick={handleCoordinatePick}>
-              📍 좌표 녹화
+              📍 {t('coordinateRecord')}
             </button>
             {pickingCoordinate && (
               <div className="node-hint">
-                화면을 클릭하거나 F8로 확정하세요. (Esc 취소)
+                {t('coordinatePickHint')}
               </div>
             )}
             {recordHint && <div className="node-hint">{recordHint}</div>}
@@ -528,8 +586,8 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
 
         {isKeyboardNode && (
           <div className="node-section">
-            <div className="node-section-title">키보드</div>
-            {keyboardMode === '단축키' && (
+            <div className="node-section-title">{t('keyboard')}</div>
+            {keyboardMode === 'hotkey' && (
               <>
                 <button
                   type="button"
@@ -537,12 +595,12 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
                   style={{ background: recordingKeys ? '#dc2626' : '#8b5cf6' }}
                   onClick={toggleKeyRecording}
                 >
-                  {recordingKeys ? '⏹ 녹화 확정' : '🎹 키 녹화'}
+                  {recordingKeys ? `⏹ ${t('keyConfirm')}` : `🎹 ${t('keyRecord')}`}
                 </button>
                 <div className="node-hint">
                   {recordingKeys
-                    ? '조합 키를 누른 뒤 버튼을 다시 눌러 저장합니다. Esc=취소'
-                    : '단축키 조합을 녹화합니다. (예: Ctrl+Z)'}
+                    ? t('keyRecordingHint')
+                    : t('keyRecordHint')}
                 </div>
                 {recordedKeys.length > 0 && (
                   <div className="node-hint">Keys: {recordedKeys.join(' + ')}</div>
@@ -550,11 +608,11 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
                 {recordHint && <div className="node-hint">{recordHint}</div>}
               </>
             )}
-            {keyboardMode === '문자열' && (
+            {keyboardMode === 'text' && (
               <div className="node-hint">
                 {config.hangul_typewrite
-                  ? '한글 타자 입력 ON: 두벌식 키로 한 글자씩 입력합니다. (시작 시 IME 모드 1회 확인)'
-                  : '문자열 모드: ASCII는 키 입력, 그 외는 클립보드 붙여넣기를 시도합니다.'}
+                  ? t('koreanTypingOn')
+                  : t('textTyping')}
               </div>
             )}
           </div>
@@ -562,21 +620,21 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
 
         {isImageNode && (
           <div className="node-section">
-            <div className="node-section-title">이미지</div>
+            <div className="node-section-title">{t('image')}</div>
             <div className="button-row">
-              <button type="button" className="node-button nodrag" style={{ background: '#eab308' }} onClick={() => handleCapture(0)}>
-                📷 캡처
+              <button type="button" disabled={Boolean(capturePending)} className={`node-button nodrag ${capturePending === 'instant' ? 'is-active' : ''}`} style={{ background: '#eab308' }} onClick={() => handleCapture(0)}>
+                📷 {t('capture')}
               </button>
-              <button type="button" className="node-button nodrag" style={{ background: '#f97316' }} onClick={() => handleCapture(3)}>
-                ⏱ 3초 후 캡처
+              <button type="button" disabled={Boolean(capturePending)} className={`node-button nodrag ${capturePending === 'delayed' ? 'is-active' : ''}`} style={{ background: '#f97316' }} onClick={() => handleCapture(5)}>
+                ⏱ {t('captureDelayed')}
               </button>
             </div>
             <div className="button-row">
               <button type="button" className="node-button nodrag" style={{ background: '#14b8a6' }} onClick={handleRegionSelect}>
-                🎯 영역 설정
+                🎯 {t('setRegion')}
               </button>
-              <button type="button" className="node-button nodrag" style={{ background: '#64748b' }} onClick={() => onChange('search_region', null)}>
-                🔄 초기화
+              <button type="button" className="node-button nodrag" style={{ background: '#64748b' }} onClick={handleImageReset}>
+                🔄 {t('reset')}
               </button>
             </div>
             {config.image_url && (
@@ -601,19 +659,19 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
               </div>
             )}
             {showOffsetPicker && (
-              <div className="node-hint">기본(0,0)=이미지 중앙. 클릭한 지점만큼 중앙에서 오프셋됩니다.</div>
+              <div className="node-hint">{t('imageOffsetHint')}</div>
             )}
             {showOffsetPicker && (
               <div className="node-hint">
-                오프셋(중앙 기준): ({Number(config.offset_x) || 0}, {Number(config.offset_y) || 0})
+                {t('offset')}: ({Number(config.offset_x) || 0}, {Number(config.offset_y) || 0})
                 {Array.isArray(config.img_size) ? ` / ${config.img_size[0]}×${config.img_size[1]}` : ''}
               </div>
             )}
             {config.search_region && (
-              <div className="node-hint">영역: {JSON.stringify(config.search_region)}</div>
+              <div className="node-hint">{t('region')}: {JSON.stringify(config.search_region)}</div>
             )}
             {!config.image_url && (
-              <div className="node-hint">캡처한 이미지를 기준으로 화면을 찾습니다.</div>
+              <div className="node-hint">{t('imageEmptyHint')}</div>
             )}
             {recordHint && <div className="node-hint">{recordHint}</div>}
           </div>
@@ -621,7 +679,7 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
 
         {!hasSchema && !isImageNode && !isCoordinateNode && !isKeyboardNode && (
           <div className="node-label" style={{ textAlign: 'center', color: '#64748b' }}>
-            No configuration
+            {t('noConfiguration')}
           </div>
         )}
       </div>

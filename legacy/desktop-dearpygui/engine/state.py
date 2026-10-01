@@ -10,6 +10,14 @@ _key_listener = None
 # 매크로 실행 중 노드 간 데이터 공유를 위한 상태 저장소
 macro_state = {}
 
+def update_status(message):
+    """화면 우상단 오버레이에 메시지 표시"""
+    if dpg.does_item_exist("status_overlay_text"):
+        dpg.set_value("status_overlay_text", message)
+    # console 출력도 병행
+    if message:
+        print(f"[STATUS] {message}")
+
 def start_coordinate_picker(callback):
     """전역 리스너를 시작하여 화면 클릭이나 'Z' 키 입력 시 좌표를 가져옵니다."""
     global _pick_callback, _mouse_listener, _key_listener

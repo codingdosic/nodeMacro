@@ -29,6 +29,11 @@ class Executor:
         if self.running:
             return
         
+        import dearpygui.dearpygui as dpg
+        if dpg.does_item_exist("status_overlay"):
+            dpg.show_item("status_overlay")
+            state.update_status("매크로 준비 중...")
+
         self.running = True
         self._stop_requested = False
         self.thread = threading.Thread(
@@ -41,6 +46,15 @@ class Executor:
     def stop(self):
         self._stop_requested = True
         self.running = False
+        state.update_status("매크로 중단됨")
+        
+        # 잠시 후 오버레이 숨기기
+        import dearpygui.dearpygui as dpg
+        def hide_later():
+            time.sleep(1.5)
+            if dpg.does_item_exist("status_overlay"):
+                dpg.hide_item("status_overlay")
+        threading.Thread(target=hide_later, daemon=True).start()
 
     def _run_loop(self, start_node, all_nodes, all_links):
         # 실행 전 전역 매크로 상태 초기화 및 모든 노드 리셋
@@ -51,12 +65,16 @@ class Executor:
         current_node = start_node
         
         while current_node and not self._stop_requested:
+            # 현재 실행 중인 노드 표시
+            state.update_status(f"실행 중: {current_node.label}")
+
             # 1. 현재 노드 실행 및 다음 핀 ID 획득
             next_pin_id = current_node.execute()
             
             # 2. 다음 노드 찾기 (지정된 핀 또는 기본 출력 핀 확인)
             next_node = self._get_next_node(current_node, all_nodes, all_links, next_pin_id)
             if not next_node:
+                state.update_status("매크로 완료")
                 print("더 이상 연결된 노드가 없습니다. 실행 종료.")
                 break
             
@@ -64,6 +82,10 @@ class Executor:
             time.sleep(0.01) # CPU 점유율 방지
             
         self.running = False
+        time.sleep(1.0)
+        import dearpygui.dearpygui as dpg
+        if dpg.does_item_exist("status_overlay"):
+            dpg.hide_item("status_overlay")
         print("매크로 실행이 종료되었습니다.")
 
     def _get_next_node(self, node, all_nodes, all_links, specific_out_pin=None):

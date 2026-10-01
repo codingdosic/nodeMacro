@@ -32,13 +32,32 @@ class StartNode(BaseNode):
             with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static):
                 with dpg.group(width=self.width):
                     dpg.add_text("매크로 시작점", color=(100, 200, 255))
+                    self.delay_input = dpg.add_input_int(label="지연(ms)", default_value=0, width=80, step=0)
+                    dpg.add_text("실행 전 대기 시간", color=(150, 150, 150))
             
             with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as self.output_pin:
                 with dpg.group(width=self.width):
                     dpg.add_text("Out", indent=self.width - 30)
 
     def execute(self):
+        delay = dpg.get_value(self.delay_input)
+        if delay > 0:
+            print(f"매크로 시작 전 {delay}ms 대기 중...")
+            time.sleep(delay / 1000.0)
         print("매크로 실행을 시작합니다.")
+        return self.output_pin
+
+    def get_config(self):
+        # BaseNode의 get_config를 활용하면서 StartNode만의 데이터 추가
+        pos = dpg.get_item_pos(self.node_id)
+        return {
+            "pos": pos,
+            "data": {"delay": dpg.get_value(self.delay_input)}
+        }
+
+    def apply_config(self, data):
+        if "delay" in data:
+            dpg.set_value(self.delay_input, data["delay"])
 
 class CoordNode(BaseNode):
     node_type = "click" # 레거시 유지를 위해 click 사용
@@ -91,8 +110,19 @@ class WaitNode(BaseNode):
 
     def execute(self):
         ms = dpg.get_value(self.ms_input)
+        total_sec = ms / 1000.0
         print(f"대기 노드: {ms}ms 대기 중...")
-        time.sleep(ms / 1000.0)
+        
+        start_time = time.time()
+        while time.time() - start_time < total_sec:
+            remaining = total_sec - (time.time() - start_time)
+            # 화면 오버레이에 남은 시간 표시
+            state.update_status(f"대기 중... {remaining:.1f}초 남음")
+            
+            # 비상 정지 체크 (Executor의 stop 요청을 state 등을 통해 확인할 수 있으면 좋음)
+            # 여기서는 간단히 짧게 끊어서 대기
+            time.sleep(0.1)
+            
         return self.output_pin
 
     def get_config(self):
@@ -248,10 +278,20 @@ class BaseImageNode(BaseNode):
         self.search_region = data.get("search_region")
         dpg.set_value(self.wait_time_input, data.get("wait_time", 5.0))
         dpg.set_value(self.threshold_input, data.get("threshold", 0.8))
-        dpg.set_value(self.off_x_input, self.offset_x)
-        dpg.set_value(self.off_y_input, self.offset_y)
-        self._reset_search_region() if not self.search_region else dpg.set_value(self.region_text_tag, str(self.search_region))
-        if self.image_path and os.path.exists(self.image_path): self._on_image_captured(self.image_path)
+        
+        # [수정] 위젯이 생성된 경우에만 값을 설정 (IfNode 등 대응)
+        if hasattr(self, "off_x_input") and dpg.does_item_exist(self.off_x_input):
+            dpg.set_value(self.off_x_input, self.offset_x)
+        if hasattr(self, "off_y_input") and dpg.does_item_exist(self.off_y_input):
+            dpg.set_value(self.off_y_input, self.offset_y)
+            
+        if not self.search_region:
+            self._reset_search_region()
+        else:
+            dpg.set_value(self.region_text_tag, str(self.search_region))
+            
+        if self.image_path and os.path.exists(self.image_path):
+            self._on_image_captured(self.image_path)
 
 class ImageNode(BaseImageNode):
     node_type = "image"
@@ -300,15 +340,34 @@ class MouseClickNode(BaseNode):
 
     def _add_widgets(self):
         self.button_input = dpg.add_combo(items=["좌클릭", "우클릭", "더블클릭"], default_value="좌클릭", width=120)
+        self.duration_input = dpg.add_input_float(label="지속 시간(s)", default_value=0.0, width=80, format="%.2f")
+        dpg.add_text("(0.0: 즉시 클릭, >0: 꾹 누르기)", color=(120, 120, 120))
 
     def execute(self):
         pos = state.macro_state.get("target_pos")
         btn_type = dpg.get_value(self.button_input)
+        duration = dpg.get_value(self.duration_input)
+        
         if pos:
             x, y = pos
-            if btn_type == "좌클릭": pyautogui.click(x, y)
-            elif btn_type == "우클릭": pyautogui.rightClick(x, y)
-            elif btn_type == "더블클릭": pyautogui.doubleClick(x, y)
+            if btn_type == "좌클릭":
+                if duration > 0:
+                    print(f"좌클릭 꾹 누르기: {duration}s 위치: ({x}, {y})")
+                    pyautogui.mouseDown(x, y, button='left')
+                    time.sleep(duration)
+                    pyautogui.mouseUp(x, y, button='left')
+                else:
+                    pyautogui.click(x, y)
+            elif btn_type == "우클릭":
+                if duration > 0:
+                    print(f"우클릭 꾹 누르기: {duration}s 위치: ({x}, {y})")
+                    pyautogui.mouseDown(x, y, button='right')
+                    time.sleep(duration)
+                    pyautogui.mouseUp(x, y, button='right')
+                else:
+                    pyautogui.rightClick(x, y)
+            elif btn_type == "더블클릭":
+                pyautogui.doubleClick(x, y)
             print(f"마우스 클릭 실행: {btn_type} 위치: ({x}, {y})")
         else:
             print("에러: 클릭할 목표 좌표가 없습니다.")
@@ -316,11 +375,15 @@ class MouseClickNode(BaseNode):
 
     def get_config(self):
         config = super().get_config()
-        config["data"] = {"button": dpg.get_value(self.button_input)}
+        config["data"] = {
+            "button": dpg.get_value(self.button_input),
+            "duration": dpg.get_value(self.duration_input)
+        }
         return config
 
     def apply_config(self, data):
         dpg.set_value(self.button_input, data.get("button", "좌클릭"))
+        dpg.set_value(self.duration_input, data.get("duration", 0.0))
 
 class LoopNode(BaseNode):
     node_type = "loop"
@@ -497,7 +560,8 @@ class MouseScrollNode(BaseNode):
     def _add_widgets(self):
         dpg.add_text("휠 스크롤 수행", color=(150, 150, 150))
         self.amount_input = dpg.add_input_int(label="양", default_value=-100, width=80)
-        dpg.add_text("(양수: 위, 음수: 아래)", size=12, color=(120, 120, 120))
+        dpg.add_text("(양수: 위, 음수: 아래)", color=(120, 120, 120))
+
 
     def execute(self):
         amt = dpg.get_value(self.amount_input)

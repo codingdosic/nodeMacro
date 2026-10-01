@@ -4,6 +4,8 @@ import time
 import tkinter as tk
 from PIL import ImageGrab, ImageTk
 
+from backend.config import CAPTURES_DIR
+
 
 def _enable_dpi_awareness():
     """Windows DPI 스케일링과 실제 픽셀 좌표를 맞춤."""
@@ -122,9 +124,8 @@ class ImagePicker(BasePicker):
 
         try:
             img = self.full_screen_img.crop((left, top, right, bottom))
-            if not os.path.exists("assets"):
-                os.makedirs("assets")
-            filename = os.path.abspath(f"assets/capture_{int(time.time())}.png")
+            CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
+            filename = str(CAPTURES_DIR / f"capture_{int(time.time() * 1000)}.png")
             img.save(filename)
             if self.callback:
                 self.callback(filename)
@@ -176,8 +177,9 @@ def start_coordinate_tool(callback, on_cancel=None):
         # 콘솔 창 없이 실행하되, 훅은 정상 동작
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+    command = [sys.executable, "--coordinate-picker"] if getattr(sys, "frozen", False) else [sys.executable, script]
     proc = subprocess.Popen(
-        [sys.executable, script],
+        command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

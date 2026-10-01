@@ -9,9 +9,11 @@ import {
   Background,
   SelectionMode,
 } from '@xyflow/react';
-import axios from 'axios';
+import { api, websocketUrl } from './api';
 import GenericNode from './GenericNode';
 import { emitNodeUpdate } from './nodeUpdateBus';
+import { nodeLabel, t } from './i18n';
+import { DRAFT_KEY, graphFingerprint, makeDraft, parseDraft } from './draft';
 
 const nodeTypes = {
   customNode: GenericNode,
@@ -39,6 +41,12 @@ const isEditableTarget = (target) => {
 };
 
 const MAX_HISTORY = 40;
+const TUTORIAL_KEY = 'd5macro-tutorial-v1';
+const DEFAULT_APP_SETTINGS = {
+  record_stop_key: 'f8',
+  panic_stop_key: 'esc',
+  hotkey_choices: ['esc', 'pause', ...Array.from({ length: 12 }, (_, index) => `f${index + 1}`)],
+};
 
 const cloneConfig = (config) => {
   try {
@@ -147,7 +155,7 @@ const edgesForHandle = (edgeList, handleInfo) => {
   });
 };
 
-const NodeEditor = () => {
+const NodeEditor = ({ currentLanguage, onLanguageChange }) => {
   const reactFlowWrapper = useRef(null);
   const clipboardRef = useRef({ nodes: [], edges: [] });
   const nodesRef = useRef([]);
@@ -156,13 +164,90 @@ const NodeEditor = () => {
   const redoStackRef = useRef([]);
   const isRestoringRef = useRef(false);
   const historyLockRef = useRef(false);
+  const logIdRef = useRef(0);
+  const draftTimerRef = useRef(null);
+  const isLockedRef = useRef(false);
+  const settingsRef = useRef(DEFAULT_APP_SETTINGS);
+  const cleanGraphRef = useRef(graphFingerprint({ nodes: [], edges: [] }));
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [reactFlowInstance, setReactFlowInstance] = useState(null);
-  const [status, setStatus] = useState('Idle');
+  const [status, setStatus] = useState(t('idle'));
   const [contextMenu, setContextMenu] = useState(null);
   const [saveDialog, setSaveDialog] = useState(null); // { name, overwriteConfirm }
   const [loadDialog, setLoadDialog] = useState(null); // { files, selected }
+  const [logs, setLogs] = useState([]);
+  const [showLogs, setShowLogs] = useState(false);
+  const [draftReady, setDraftReady] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
+  const [isRunning, setIsRunning] = useState(false);
+  const [recordingPhase, setRecordingPhase] = useState('idle');
+  const [recordingResult, setRecordingResult] = useState(null);
+  const [tutorialPage, setTutorialPage] = useState(null);
+  const [appSettings, setAppSettings] = useState(DEFAULT_APP_SETTINGS);
+  const [settingsDialog, setSettingsDialog] = useState(null);
+  const isLocked = isRunning || recordingPhase !== 'idle';
+
+  const formatHotkeys = (message) => message
+    .replace('{recordStop}', appSettings.record_stop_key.toUpperCase())
+    .replace('{panicStop}', appSettings.panic_stop_key.toUpperCase());
+
+  const tutorialPages = [
+    { title: t('tutorialCreateTitle'), body: t('tutorialCreateBody'), items: [t('tutorialCreateRecord'), t('tutorialCreateNodes')] },
+    { title: t('tutorialFlowTitle'), body: t('tutorialFlowBody'), items: [t('tutorialFlowExample'), t('tutorialFlowHint')] },
+    { title: t('tutorialRunTitle'), body: t('tutorialRunBody'), items: [t('tutorialRunStart'), formatHotkeys(t('tutorialRunStop')), t('tutorialRunLog')] },
+    { title: t('tutorialSaveTitle'), body: t('tutorialSaveBody'), items: [t('tutorialSaveScript'), t('tutorialSaveBatch')] },
+    { title: t('tutorialPracticeTitle'), body: t('tutorialPracticeBody'), items: [t('tutorialPracticeOne'), formatHotkeys(t('tutorialPracticeTwo')), t('tutorialPracticeThree'), t('tutorialPracticeFour')] },
+  ];
+
+  useEffect(() => {
+    if (!localStorage.getItem(TUTORIAL_KEY)) {
+      setTutorialPage(0);
+    }
+  }, []);
+
+  const closeTutorial = () => {
+    localStorage.setItem(TUTORIAL_KEY, 'done');
+    setTutorialPage(null);
+  };
+
+  useEffect(() => {
+    isLockedRef.current = isLocked;
+  }, [isLocked]);
+
+  useEffect(() => {
+    settingsRef.current = appSettings;
+  }, [appSettings]);
+
+  useEffect(() => {
+    api.get('/health')
+      .then((res) => {
+        setIsRunning(Boolean(res.data.running));
+        if (res.data.recording) setRecordingPhase('recording');
+      })
+      .catch(() => {});
+    api.get('/settings')
+      .then((res) => setAppSettings({ ...DEFAULT_APP_SETTINGS, ...res.data }))
+      .catch(() => {});
+  }, []);
+
+  const appendLog = useCallback((message, level = 'info') => {
+    if (!message) return;
+    const entry = {
+      id: ++logIdRef.current,
+      time: new Date().toLocaleTimeString(),
+      message,
+      level,
+    };
+    setLogs((items) => [...items.slice(-299), entry]);
+  }, []);
+
+  const markClean = useCallback((graph) => {
+    clearTimeout(draftTimerRef.current);
+    cleanGraphRef.current = graphFingerprint(sanitizeMacroPayload(graph.nodes, graph.edges));
+    setIsDirty(false);
+    localStorage.removeItem(DRAFT_KEY);
+  }, []);
 
   useEffect(() => {
     nodesRef.current = nodes;
@@ -171,6 +256,32 @@ const NodeEditor = () => {
   useEffect(() => {
     edgesRef.current = edges;
   }, [edges]);
+
+  useEffect(() => {
+    if (!draftReady) return undefined;
+    const graph = sanitizeMacroPayload(nodes, edges);
+    const dirty = graphFingerprint(graph) !== cleanGraphRef.current;
+    setIsDirty(dirty);
+    clearTimeout(draftTimerRef.current);
+    if (!dirty) {
+      localStorage.removeItem(DRAFT_KEY);
+      return undefined;
+    }
+    draftTimerRef.current = setTimeout(() => {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(makeDraft(graph)));
+    }, 500);
+    return () => clearTimeout(draftTimerRef.current);
+  }, [nodes, edges, draftReady]);
+
+  useEffect(() => {
+    const warnBeforeClose = (event) => {
+      if (!isDirty) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeClose);
+    return () => window.removeEventListener('beforeunload', warnBeforeClose);
+  }, [isDirty]);
 
   const pushHistory = useCallback(() => {
     if (isRestoringRef.current || historyLockRef.current) {
@@ -231,12 +342,30 @@ const NodeEditor = () => {
   }, [applySnapshot]);
 
   useEffect(() => {
-    const ws = new WebSocket('ws://127.0.0.1:8000/ws');
-    ws.onmessage = (event) => {
+    let ws;
+    let reconnectTimer;
+    let disposed = false;
+    const connect = () => {
+      ws = new WebSocket(websocketUrl());
+      ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
       if (data.type === 'status') {
         setStatus(data.message);
+        if (!data.message?.startsWith('실행 중:') && !data.message?.includes('대기 중...')) {
+          appendLog(data.message, data.message?.includes('오류') ? 'error' : 'info');
+        }
       } else if (data.type === 'execution') {
+        if (data.phase === 'reset') {
+          setLogs([]);
+          setIsRunning(true);
+          setContextMenu(null);
+        } else if (data.phase === 'finished') {
+          setIsRunning(false);
+        } else {
+          const node = nodesRef.current.find((item) => item.id === data.node_id);
+          const label = nodeLabel(node?.data?.type, node?.data?.label || data.node_id);
+          appendLog(`${label}: ${t(`phase_${data.phase}`)}${data.message ? ` — ${data.message}` : ''}`, data.phase === 'error' ? 'error' : data.phase);
+        }
         setNodes((nds) => nds.map((node) => {
           if (data.phase === 'reset') {
             return { ...node, data: { ...node.data, executionState: null, executionMessage: null } };
@@ -253,16 +382,33 @@ const NodeEditor = () => {
           }
           return node;
         }));
+      } else if (data.type === 'recorder') {
+        if (data.phase === 'countdown') {
+          setRecordingPhase('countdown');
+          setStatus(t('recordCountdown'));
+          setContextMenu(null);
+        } else if (data.phase === 'started') {
+          setRecordingPhase('recording');
+          setStatus(t('recordingF8').replace('{key}', settingsRef.current.record_stop_key.toUpperCase()));
+        } else if (data.phase === 'complete') {
+          setRecordingPhase('idle');
+          setRecordingResult(data);
+          setStatus(t('recordComplete'));
+        } else if (data.phase === 'cancelled') {
+          setRecordingPhase('idle');
+          setStatus(t('recordCancelled'));
+        }
       } else if (data.type === 'capture_complete') {
         const stamp = Date.now();
         const patch = {
           image_path: data.file_path,
-          image_url: `http://127.0.0.1:8000${data.url}?t=${stamp}`,
+          image_url: `${data.url}?t=${stamp}`,
         };
         emitNodeUpdate(data.node_id, {
           revision: stamp,
           config: patch,
-          hint: '캡처 완료',
+          hint: t('captureDone'),
+          capturePending: false,
         });
         setNodes((nds) =>
           nds.map((node) => {
@@ -288,7 +434,7 @@ const NodeEditor = () => {
         emitNodeUpdate(data.node_id, {
           revision: stamp,
           config: patch,
-          hint: '탐색 영역이 설정되었습니다.',
+          hint: t('regionDone'),
         });
         setNodes((nds) =>
           nds.map((node) => {
@@ -316,7 +462,7 @@ const NodeEditor = () => {
           lastCoordPickId: stamp,
           config: patch,
           pickingCoordinate: false,
-          hint: `좌표 저장됨: (${data.x}, ${data.y})`,
+          hint: `${t('coordinateSaved')}: (${data.x}, ${data.y})`,
         });
         setNodes((nds) =>
           nds.map((node) => {
@@ -340,16 +486,39 @@ const NodeEditor = () => {
       } else if (data.type === 'coordinate_cancelled') {
         emitNodeUpdate(data.node_id, {
           pickingCoordinate: false,
-          hint: '좌표 선택 취소됨',
+          hint: t('coordinateCancelled'),
         });
       }
+      };
+      ws.onclose = (event) => {
+        if (disposed) return;
+        if (event.code === 1008 && !sessionStorage.getItem('d5macro-auth-reload')) {
+          sessionStorage.setItem('d5macro-auth-reload', '1');
+          window.location.replace(`/?refresh=${Date.now()}`);
+          return;
+        }
+        reconnectTimer = window.setTimeout(connect, 1000);
+      };
     };
-    return () => ws.close();
-  }, [setNodes]);
+    connect();
+    return () => {
+      disposed = true;
+      window.clearTimeout(reconnectTimer);
+      ws?.close();
+    };
+  }, [setNodes, appendLog]);
+
+  const handleLanguageChange = (event) => {
+    const wasIdle = status === t('idle');
+    onLanguageChange(event.target.value);
+    if (wasIdle) setStatus(t('idle'));
+    setNodes((items) => items.map((node) => ({ ...node, data: { ...node.data } })));
+  };
 
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
 
   const onConnect = useCallback((params) => {
+    if (isLockedRef.current) return;
     pushHistory();
     setEdges((eds) => addEdge(params, eds));
   }, [setEdges, pushHistory]);
@@ -360,6 +529,7 @@ const NodeEditor = () => {
   }, []);
 
   const onNodeConfigChange = useCallback((nodeId, keyOrPatch, value) => {
+    if (isLockedRef.current) return;
     const patch = typeof keyOrPatch === 'object' && keyOrPatch !== null
       ? keyOrPatch
       : { [keyOrPatch]: value };
@@ -386,19 +556,42 @@ const NodeEditor = () => {
     onNodeConfigChangeRef.current = onNodeConfigChange;
   }, [onNodeConfigChange]);
 
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (raw) {
+        const draft = parseDraft(raw);
+        const savedAt = new Date(draft.saved_at).toLocaleString();
+        if (window.confirm(`${t('recoverDraft')}\n${savedAt}`)) {
+          applySnapshot(draft.graph);
+          setStatus(t('draftRestored'));
+        } else {
+          localStorage.removeItem(DRAFT_KEY);
+        }
+      }
+    } catch (error) {
+      console.warn('Discarding invalid draft', error);
+      localStorage.removeItem(DRAFT_KEY);
+    } finally {
+      setDraftReady(true);
+    }
+  }, [applySnapshot]);
+
   const handleNodesChange = useCallback((changes) => {
+    if (isLocked) return;
     if (changes.some((change) => change.type === 'remove')) {
       pushHistory();
     }
     onNodesChange(changes);
-  }, [onNodesChange, pushHistory]);
+  }, [isLocked, onNodesChange, pushHistory]);
 
   const handleEdgesChange = useCallback((changes) => {
+    if (isLocked) return;
     if (changes.some((change) => change.type === 'remove')) {
       pushHistory();
     }
     onEdgesChange(changes);
-  }, [onEdgesChange, pushHistory]);
+  }, [isLocked, onEdgesChange, pushHistory]);
 
   const deleteNodesByIds = useCallback((nodeIds) => {
     if (!nodeIds.length) {
@@ -519,6 +712,7 @@ const NodeEditor = () => {
 
   useEffect(() => {
     const onKeyDown = (event) => {
+      if (isLocked) return;
       if (isEditableTarget(event.target)) {
         return;
       }
@@ -548,11 +742,12 @@ const NodeEditor = () => {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [copySelection, pasteClipboard, undo, redo]);
+  }, [isLocked, copySelection, pasteClipboard, undo, redo]);
 
   const onDrop = useCallback(
     (event) => {
       event.preventDefault();
+      if (isLocked) return;
 
       const type = event.dataTransfer.getData('application/reactflow');
       const label = event.dataTransfer.getData('application/reactflow/label');
@@ -560,7 +755,7 @@ const NodeEditor = () => {
       let schema = {};
       try {
         schema = JSON.parse(schemaRaw);
-      } catch (e) {
+      } catch {
         /* ignore */
       }
 
@@ -597,7 +792,7 @@ const NodeEditor = () => {
 
       setNodes((nds) => nds.concat(newNode));
     },
-    [reactFlowInstance, onNodeConfigChange, setNodes, pushHistory]
+    [isLocked, reactFlowInstance, onNodeConfigChange, setNodes, pushHistory]
   );
 
   const openEdgeContextMenu = useCallback((event, edgeIds) => {
@@ -635,6 +830,7 @@ const NodeEditor = () => {
       x: event.clientX,
       y: event.clientY,
       ids,
+      nodeId: node.id,
     });
   }, [nodes, edges, openEdgeContextMenu]);
 
@@ -647,6 +843,10 @@ const NodeEditor = () => {
   }, [edges, openEdgeContextMenu]);
 
   const onPaneContextMenu = useCallback((event) => {
+    if (isLocked) {
+      event.preventDefault();
+      return;
+    }
     const edgeIdAtPoint = findEdgeIdAtPoint(event.clientX, event.clientY);
     if (edgeIdAtPoint && edges.some((edge) => edge.id === edgeIdAtPoint)) {
       openEdgeContextMenu(event, [edgeIdAtPoint]);
@@ -659,10 +859,10 @@ const NodeEditor = () => {
       y: event.clientY,
       ids: [],
     });
-  }, [edges, openEdgeContextMenu]);
+  }, [isLocked, edges, openEdgeContextMenu]);
 
   const handleContextAction = (action) => {
-    if (!contextMenu) {
+    if (isLocked || !contextMenu) {
       return;
     }
     if (action === 'delete-nodes') {
@@ -694,7 +894,7 @@ const NodeEditor = () => {
     closeContextMenu();
   };
 
-  const handleRun = async () => {
+  const handleRun = async (startNodeId = null) => {
     const formattedNodes = {};
     nodes.forEach((n) => {
       formattedNodes[n.id] = {
@@ -710,25 +910,156 @@ const NodeEditor = () => {
       targetHandle: e.targetHandle || 'input_pin',
     }));
 
-    try {
-      const res = await axios.post('http://127.0.0.1:8000/api/macro/run', {
-        nodes: formattedNodes,
-        links: formattedLinks,
+    const payload = { nodes: formattedNodes, links: formattedLinks, start_node_id: startNodeId };
+    const showValidationIssues = (issues) => {
+      const issueByNode = new Map();
+      (issues || []).forEach((issue) => {
+        appendLog(`${issue.level === 'error' ? t('validationError') : t('validationWarning')}: ${issue.message}`, issue.level);
+        if (issue.node_id && (issue.level === 'error' || !issueByNode.has(issue.node_id))) {
+          issueByNode.set(issue.node_id, issue);
+        }
       });
-      if (res.data.status === 'error') {
-        alert(res.data.message || '실행 실패');
+      setNodes((current) => current.map((node) => {
+        const issue = issueByNode.get(node.id);
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            executionState: issue?.level || null,
+            executionMessage: issue?.message || null,
+          },
+        };
+      }));
+      setShowLogs(true);
+    };
+
+    try {
+      let res = await api.post('/macro/run', payload);
+      if (res.data.status === 'started') setIsRunning(true);
+      if (res.data.status === 'validation_error') {
+        showValidationIssues(res.data.issues);
+        setStatus(t('validationFailed'));
+        alert(t('validationFailed'));
+      } else if (res.data.status === 'validation_warning') {
+        showValidationIssues(res.data.issues);
+        setStatus(t('validationWarning'));
+        if (window.confirm(t('validationWarningConfirm'))) {
+          res = await api.post('/macro/run', { ...payload, allow_warnings: true });
+          if (res.data.status === 'started') setIsRunning(true);
+          if (res.data.status === 'error') {
+            alert(res.data.message || t('runFailed'));
+          }
+        }
+      } else if (res.data.status === 'error') {
+        alert(res.data.message || t('runFailed'));
       }
     } catch (e) {
       console.error(e);
-      alert('Failed to start macro');
+      alert(t('runFailed'));
     }
   };
 
   const handleStop = async () => {
     try {
-      await axios.post('http://127.0.0.1:8000/api/macro/stop');
+      await api.post('/macro/stop');
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const handleResetEditor = () => {
+    if (isLocked || (!nodes.length && !edges.length) || !window.confirm(t('resetEditorConfirm'))) {
+      return;
+    }
+    pushHistory();
+    setNodes([]);
+    setEdges([]);
+    setContextMenu(null);
+    setStatus(t('idle'));
+  };
+
+  const handleRecord = async () => {
+    try {
+      if (recordingPhase !== 'idle') {
+        await api.post('/recorder/stop');
+        return;
+      }
+      setRecordingResult(null);
+      const res = await api.post('/recorder/start');
+      if (res.data.status === 'error') {
+        alert(res.data.message || t('recordFailed'));
+        return;
+      }
+      setRecordingPhase('countdown');
+      setStatus(t('recordCountdown'));
+    } catch (error) {
+      console.error(error);
+      setRecordingPhase('idle');
+      alert(t('recordFailed'));
+    }
+  };
+
+  const saveAppSettings = async () => {
+    if (!settingsDialog) return;
+    if (settingsDialog.record_stop_key === settingsDialog.panic_stop_key) {
+      alert(t('hotkeySettingsHint'));
+      return;
+    }
+    try {
+      const res = await api.post('/settings', {
+        record_stop_key: settingsDialog.record_stop_key,
+        panic_stop_key: settingsDialog.panic_stop_key,
+      });
+      setAppSettings({ ...DEFAULT_APP_SETTINGS, ...res.data });
+      setSettingsDialog(null);
+    } catch (error) {
+      console.error(error);
+      alert(error.response?.data?.message || t('settingsSaveFailed'));
+    }
+  };
+
+  const applyRecording = async () => {
+    const steps = recordingResult?.steps || [];
+    try {
+      const res = await api.get('/nodes/types');
+      const definitions = new Map(res.data.map((item) => [item.type, item]));
+      pushHistory();
+      const recordedNodes = steps.map((step, index) => {
+        const definition = definitions.get(step.type) || {};
+        const nodeId = getId();
+        const defaults = {};
+        Object.entries(definition.schema || {}).forEach(([key, field]) => {
+          if (field?.default !== undefined) defaults[key] = field.default;
+        });
+        return {
+          id: nodeId,
+          type: 'customNode',
+          position: { x: 120, y: 80 + index * 240 },
+          data: {
+            id: nodeId,
+            type: step.type,
+            label: nodeLabel(step.type, definition.label || step.type),
+            configSchema: definition.schema || {},
+            config: { ...defaults, ...(step.config || {}) },
+            onChange: onNodeConfigChange,
+          },
+        };
+      });
+      const recordedEdges = recordedNodes.slice(1).map((node, index) => ({
+        id: `e_recorded_${recordedNodes[index].id}_${node.id}`,
+        source: recordedNodes[index].id,
+        sourceHandle: 'output_pin',
+        target: node.id,
+        targetHandle: 'input_pin',
+      }));
+      setNodes(recordedNodes);
+      setEdges(recordedEdges);
+      setRecordingResult(null);
+      setStatus(t('recordApplied'));
+      requestAnimationFrame(() => reactFlowInstance?.fitView({ padding: 0.2 }));
+    } catch (error) {
+      console.error(error);
+      alert(t('recordApplyFailed'));
     }
   };
 
@@ -745,8 +1076,10 @@ const NodeEditor = () => {
     }));
     syncIdCounter(loadedNodes);
     setNodes(loadedNodes);
-    setEdges(macroData.edges || []);
-  }, [onNodeConfigChange, setNodes, setEdges, pushHistory]);
+    const loadedEdges = macroData.edges || [];
+    setEdges(loadedEdges);
+    markClean({ nodes: loadedNodes, edges: loadedEdges });
+  }, [onNodeConfigChange, setNodes, setEdges, pushHistory, markClean]);
 
   const performSave = useCallback(async (name, overwrite = false, generateBatch = false) => {
     const trimmed = (name || '').trim();
@@ -754,7 +1087,7 @@ const NodeEditor = () => {
       return;
     }
     try {
-      const res = await axios.post('http://127.0.0.1:8000/api/scripts/save', {
+      const res = await api.post('/scripts/save', {
         name: trimmed,
         overwrite,
         generate_batch: generateBatch,
@@ -780,19 +1113,21 @@ const NodeEditor = () => {
               onChange: onNodeConfigChange,
             },
           }));
+          const syncedEdges = macro.edges || edgesRef.current;
           setNodes(synced);
-          setEdges(macro.edges || edgesRef.current);
+          setEdges(syncedEdges);
+          markClean({ nodes: synced, edges: syncedEdges });
         }
         setSaveDialog(null);
-        setStatus(`저장됨: ${res.data.name || trimmed}`);
+        setStatus(`${t('saved')}: ${res.data.name || trimmed}`);
       } else {
-        alert(res.data.message || '저장 실패');
+        alert(res.data.message || t('saveFailed'));
       }
     } catch (e) {
       console.error(e);
-      alert('저장 실패');
+      alert(t('saveFailed'));
     }
-  }, [onNodeConfigChange, setNodes, setEdges]);
+  }, [onNodeConfigChange, setNodes, setEdges, markClean]);
 
   const openSaveDialog = () => {
     setSaveDialog({ name: 'macro_1', overwriteConfirm: false, generateBatch: false });
@@ -800,16 +1135,25 @@ const NodeEditor = () => {
 
   const openLoadDialog = async () => {
     try {
-      const res = await axios.get('http://127.0.0.1:8000/api/scripts');
+      const res = await api.get('/scripts');
       const files = (res.data || []).filter((f) => typeof f === 'string');
       if (files.length === 0) {
-        alert('저장된 매크로가 없습니다.');
+        alert(t('noScripts'));
         return;
       }
       setLoadDialog({ files, selected: files[0] });
     } catch (e) {
       console.error(e);
-      alert('목록을 불러오지 못했습니다.');
+      alert(t('loadListFailed'));
+    }
+  };
+
+  const openScriptsFolder = async () => {
+    try {
+      await api.post('/scripts/open-folder');
+    } catch (error) {
+      console.error(error);
+      alert(t('openFolderFailed'));
     }
   };
 
@@ -817,32 +1161,71 @@ const NodeEditor = () => {
     if (!loadDialog?.selected) {
       return;
     }
+    if (isDirty && !window.confirm(t('discardUnsaved'))) {
+      return;
+    }
     try {
-      const loadRes = await axios.post('http://127.0.0.1:8000/api/scripts/load', {
+      let loadRes = await api.post('/scripts/load', {
         path: loadDialog.selected,
       });
+      if (loadRes.data.status === 'warning' && window.confirm(loadRes.data.message)) {
+        loadRes = await api.post('/scripts/load', { path: loadDialog.selected, force: true });
+      }
       if (loadRes.data.status === 'success') {
         applyLoadedMacro(loadRes.data.macro_data);
         setLoadDialog(null);
-        setStatus(`불러옴: ${loadDialog.selected}`);
+        setStatus(`${t('loaded')}: ${loadDialog.selected}`);
       } else {
-        alert(loadRes.data.message || '불러오기 실패');
+        alert(loadRes.data.message || t('loadFailed'));
       }
     } catch (e) {
       console.error(e);
-      alert('불러오기 실패');
+      alert(t('loadFailed'));
     }
   };
 
   return (
-    <div className="editor-container" ref={reactFlowWrapper}>
+    <div className={`editor-container${isLocked ? ' graph-locked' : ''}`} ref={reactFlowWrapper}>
       <div className="topbar">
-        <button type="button" className="action-button play" onClick={handleRun}>▶ Run</button>
-        <button type="button" className="action-button stop" onClick={handleStop}>■ Stop</button>
-        <button type="button" className="action-button" style={{ fontSize: '0.8rem', padding: '4px 10px' }} onClick={openSaveDialog}>💾 Save</button>
-        <button type="button" className="action-button" style={{ fontSize: '0.8rem', padding: '4px 10px' }} onClick={openLoadDialog}>📂 Load</button>
+        <button type="button" className="action-button play" onClick={() => handleRun()} disabled={isLocked}>▶ {t('run')}</button>
+        <button type="button" className="action-button stop" onClick={handleStop}>■ {t('stop')}</button>
+        <button type="button" className={`action-button record${recordingPhase !== 'idle' ? ' is-active' : ''}`} onClick={handleRecord} disabled={isRunning}>● {recordingPhase === 'idle' ? t('record') : t('recordStop')}</button>
+        <button type="button" className="action-button" title={isDirty ? t('unsavedChanges') : ''} style={{ fontSize: '0.8rem', padding: '4px 10px' }} onClick={openSaveDialog} disabled={isLocked}>💾 {t('save')}{isDirty ? ' *' : ''}</button>
+        <button type="button" className="action-button" style={{ fontSize: '0.8rem', padding: '4px 10px' }} onClick={openLoadDialog} disabled={isLocked}>📂 {t('load')}</button>
+        <button type="button" className="action-button compact" onClick={openScriptsFolder}>📁 {t('openFolder')}</button>
+        <button type="button" className="action-button compact" onClick={handleResetEditor} disabled={isLocked}>↺ {t('resetEditor')}</button>
         <div className="status-text">{status}</div>
+        <button type="button" className="action-button compact" onClick={() => setShowLogs((value) => !value)}>📋 {t('logs')} ({logs.length})</button>
+        <button type="button" className="action-button compact" onClick={() => setTutorialPage(0)}>❓ {t('help')}</button>
+        <button type="button" className="action-button compact" onClick={() => setSettingsDialog({ ...appSettings })} disabled={isLocked}>⚙ {t('settings')}</button>
+        <select
+          className="language-select"
+          aria-label="Language"
+          value={currentLanguage}
+          onChange={handleLanguageChange}
+        >
+          <option value="ko">한국어</option>
+          <option value="en">English</option>
+        </select>
       </div>
+
+      {showLogs && (
+        <section className="execution-log" aria-label={t('logs')}>
+          <header>
+            <strong>{t('executionLog')}</strong>
+            <button type="button" onClick={() => setLogs([])}>{t('clear')}</button>
+          </header>
+          <div className="execution-log-list">
+            {logs.length === 0 && <div className="execution-log-empty">{t('noLogs')}</div>}
+            {logs.map((entry) => (
+              <div key={entry.id} className={`execution-log-entry ${entry.level}`}>
+                <time>{entry.time}</time>
+                <span>{entry.message}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <ReactFlow
         nodes={nodes}
@@ -860,14 +1243,17 @@ const NodeEditor = () => {
         onPaneContextMenu={onPaneContextMenu}
         nodeTypes={nodeTypes}
         connectionRadius={36}
-        deleteKeyCode={['Backspace', 'Delete']}
+        deleteKeyCode={isLocked ? null : ['Backspace', 'Delete']}
+        nodesDraggable={!isLocked}
+        nodesConnectable={!isLocked}
+        elementsSelectable={!isLocked}
         multiSelectionKeyCode="Shift"
         selectionOnDrag
         selectionMode={SelectionMode.Partial}
         panOnDrag={[1]}
         selectNodesOnDrag={false}
-        edgesFocusable
-        edgesSelectable
+        edgesFocusable={!isLocked}
+        edgesSelectable={!isLocked}
         defaultEdgeOptions={{
           selectable: true,
           focusable: true,
@@ -894,12 +1280,22 @@ const NodeEditor = () => {
         >
           {contextMenu.kind === 'node' && (
             <>
-              <button type="button" onClick={() => handleContextAction('copy')}>복사</button>
-              <button type="button" className="danger" onClick={() => handleContextAction('delete-nodes')}>삭제</button>
+              <button
+                type="button"
+                onClick={() => {
+                  const nodeId = contextMenu.nodeId;
+                  closeContextMenu();
+                  handleRun(nodeId);
+                }}
+              >
+                ▶ {t('runFromHere')}
+              </button>
+              <button type="button" onClick={() => handleContextAction('copy')}>{t('copy')}</button>
+              <button type="button" className="danger" onClick={() => handleContextAction('delete-nodes')}>{t('delete')}</button>
             </>
           )}
           {contextMenu.kind === 'edge' && (
-            <button type="button" className="danger" onClick={() => handleContextAction('delete-edges')}>연결 해제</button>
+            <button type="button" className="danger" onClick={() => handleContextAction('delete-edges')}>{t('disconnect')}</button>
           )}
           {contextMenu.kind === 'pane' && (
             <button
@@ -907,9 +1303,62 @@ const NodeEditor = () => {
               disabled={clipboardRef.current.nodes.length === 0}
               onClick={() => handleContextAction('paste')}
             >
-              붙여넣기
+              {t('paste')}
             </button>
           )}
+        </div>
+      )}
+
+      {settingsDialog && (
+        <div className="editor-modal-backdrop" onMouseDown={() => setSettingsDialog(null)}>
+          <div className="editor-modal" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-label={t('hotkeySettings')}>
+            <h3>{t('hotkeySettings')}</h3>
+            <label className="editor-modal-field">
+              <span>{t('recordStopKey')}</span>
+              <select value={settingsDialog.record_stop_key} onChange={(event) => setSettingsDialog({ ...settingsDialog, record_stop_key: event.target.value })}>
+                {settingsDialog.hotkey_choices.map((key) => <option key={key} value={key}>{key.toUpperCase()}</option>)}
+              </select>
+            </label>
+            <label className="editor-modal-field">
+              <span>{t('panicStopKey')}</span>
+              <select value={settingsDialog.panic_stop_key} onChange={(event) => setSettingsDialog({ ...settingsDialog, panic_stop_key: event.target.value })}>
+                {settingsDialog.hotkey_choices.map((key) => <option key={key} value={key}>{key.toUpperCase()}</option>)}
+              </select>
+            </label>
+            <p className="editor-modal-hint">{t('hotkeySettingsHint')}</p>
+            <div className="editor-modal-actions">
+              <button type="button" onClick={() => setSettingsDialog(null)}>{t('cancel')}</button>
+              <button type="button" className="primary" onClick={saveAppSettings}>{t('save')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tutorialPage !== null && (
+        <div className="editor-modal-backdrop">
+          <div className="editor-modal tutorial-modal" role="dialog" aria-label={t('tutorialTitle')}>
+            <div className="tutorial-progress">
+              {tutorialPages.map((_, index) => (
+                <span key={index} className={index === tutorialPage ? 'active' : ''} />
+              ))}
+            </div>
+            <div className="tutorial-step">{tutorialPage + 1} / {tutorialPages.length}</div>
+            <h3>{tutorialPages[tutorialPage].title}</h3>
+            <p>{tutorialPages[tutorialPage].body}</p>
+            <ul className="tutorial-list">
+              {tutorialPages[tutorialPage].items.map((item) => <li key={item}>{item}</li>)}
+            </ul>
+            <p className="editor-modal-hint">{t('tutorialNodeHelpHint')}</p>
+            <div className="editor-modal-actions tutorial-actions">
+              <button type="button" onClick={closeTutorial}>{t('skip')}</button>
+              {tutorialPage > 0 && <button type="button" onClick={() => setTutorialPage((page) => page - 1)}>{t('previous')}</button>}
+              {tutorialPage < tutorialPages.length - 1 ? (
+                <button type="button" className="primary" onClick={() => setTutorialPage((page) => page + 1)}>{t('next')}</button>
+              ) : (
+                <button type="button" className="primary" onClick={closeTutorial}>{t('tryIt')}</button>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
@@ -919,30 +1368,30 @@ const NodeEditor = () => {
             className="editor-modal"
             onMouseDown={(event) => event.stopPropagation()}
             role="dialog"
-            aria-label="매크로 저장"
+            aria-label={t('saveTitle')}
           >
             {saveDialog.overwriteConfirm ? (
               <>
-                <h3>덮어쓰기 확인</h3>
+                <h3>{t('overwriteTitle')}</h3>
                 <p>
-                  <strong>{saveDialog.name}</strong> 매크로가 이미 있습니다. 덮어쓸까요?
+                  <strong>{saveDialog.name}</strong> {t('overwriteQuestion')}
                 </p>
                 <div className="editor-modal-actions">
-                  <button type="button" onClick={() => setSaveDialog(null)}>취소</button>
+                  <button type="button" onClick={() => setSaveDialog(null)}>{t('cancel')}</button>
                   <button
                     type="button"
                     className="primary"
                     onClick={() => performSave(saveDialog.name, true, saveDialog.generateBatch)}
                   >
-                    덮어쓰기
+                    {t('overwrite')}
                   </button>
                 </div>
               </>
             ) : (
               <>
-                <h3>매크로 저장</h3>
+                <h3>{t('saveTitle')}</h3>
                 <label className="editor-modal-field">
-                  <span>이름</span>
+                  <span>{t('name')}</span>
                   <input
                     type="text"
                     value={saveDialog.name}
@@ -961,15 +1410,15 @@ const NodeEditor = () => {
                     checked={Boolean(saveDialog.generateBatch)}
                     onChange={(event) => setSaveDialog({ ...saveDialog, generateBatch: event.target.checked })}
                   />
-                  <span>실행용 배치 파일 생성</span>
+                  <span>{t('createBatch')}</span>
                 </label>
                 <p className="editor-modal-hint">
                   scripts/&lt;이름&gt;/&lt;이름&gt;.json + imgs/
                 </p>
                 <div className="editor-modal-actions">
-                  <button type="button" onClick={() => setSaveDialog(null)}>취소</button>
+                  <button type="button" onClick={() => setSaveDialog(null)}>{t('cancel')}</button>
                   <button type="button" className="primary" onClick={() => performSave(saveDialog.name, false, saveDialog.generateBatch)}>
-                    저장
+                    {t('save')}
                   </button>
                 </div>
               </>
@@ -984,11 +1433,11 @@ const NodeEditor = () => {
             className="editor-modal"
             onMouseDown={(event) => event.stopPropagation()}
             role="dialog"
-            aria-label="매크로 불러오기"
+            aria-label={t('loadTitle')}
           >
-            <h3>매크로 불러오기</h3>
+            <h3>{t('loadTitle')}</h3>
             <label className="editor-modal-field">
-              <span>파일</span>
+              <span>{t('file')}</span>
               <select
                 value={loadDialog.selected}
                 onChange={(event) => setLoadDialog({ ...loadDialog, selected: event.target.value })}
@@ -1000,8 +1449,25 @@ const NodeEditor = () => {
               </select>
             </label>
             <div className="editor-modal-actions">
-              <button type="button" onClick={() => setLoadDialog(null)}>취소</button>
-              <button type="button" className="primary" onClick={confirmLoad}>불러오기</button>
+              <button type="button" onClick={() => setLoadDialog(null)}>{t('cancel')}</button>
+              <button type="button" className="primary" onClick={confirmLoad}>{t('load')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {recordingResult && (
+        <div className="editor-modal-backdrop">
+          <div className="editor-modal" role="dialog" aria-label={t('recordResultTitle')}>
+            <h3>{t('recordResultTitle')}</h3>
+            <p>{t('recordResultSummary')
+              .replace('{seconds}', recordingResult.duration)
+              .replace('{events}', recordingResult.event_count)
+              .replace('{nodes}', recordingResult.steps?.length || 0)}</p>
+            <p className="editor-modal-hint">{t('recordReplaceWarning')}</p>
+            <div className="editor-modal-actions">
+              <button type="button" onClick={() => setRecordingResult(null)}>{t('discard')}</button>
+              <button type="button" className="primary" onClick={applyRecording}>{t('apply')}</button>
             </div>
           </div>
         </div>

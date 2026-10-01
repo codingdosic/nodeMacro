@@ -1,7 +1,11 @@
+import os
+
 import pyautogui
 import time
 from backend.nodes.base_node import BaseNode
 from backend.engine import state
+
+pyautogui.PAUSE = 0
 
 
 def _set_clipboard_text(text: str) -> bool:
@@ -79,7 +83,8 @@ def _find_window(title_query, activate=False):
 
     hwnd, title = matches[0]
     if activate:
-        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
         user32.SetForegroundWindow(hwnd)
     rect = wintypes.RECT()
     if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
@@ -110,7 +115,34 @@ class StartNode(BaseNode):
 
     def get_schema(self):
         return {
-            "delay": {"type": "number", "label": "지연(ms)", "default": 0}
+            "delay": {"type": "number", "label": "지연(ms)", "default": 0, "min": 0, "step": 1}
+        }
+
+
+class LaunchNode(BaseNode):
+    node_type = "launch"
+    node_label = "프로그램 실행"
+
+    @staticmethod
+    def resolve_target(value):
+        return os.path.expandvars(os.path.expanduser(str(value or "").strip().strip('"')))
+
+    def execute(self, macro_state):
+        target = self.resolve_target(self.config.get("path"))
+        try:
+            os.startfile(target)
+        except OSError as exc:
+            raise RuntimeError(f"프로그램 또는 파일을 실행하지 못했습니다: {target}") from exc
+
+        wait_after = float(self.config.get("wait_after", 0.5))
+        if wait_after > 0:
+            state.stop_event.wait(wait_after)
+        return "output_pin"
+
+    def get_schema(self):
+        return {
+            "path": {"type": "text", "label": "파일 또는 URL", "default": ""},
+            "wait_after": {"type": "number", "label": "실행 후 대기(s)", "default": 0.5, "min": 0, "step": 0.1},
         }
 
 
@@ -119,12 +151,24 @@ class WindowNode(BaseNode):
     node_label = "창 선택"
 
     def execute(self, macro_state):
-        result = _find_window(
-            self.config.get("title", ""),
-            bool(self.config.get("activate", True)),
-        )
+        title_query = self.config.get("title", "")
+        timeout = float(self.config.get("timeout", 10.0))
+        interval = float(self.config.get("poll_interval", 0.2))
+        deadline = time.monotonic() + timeout
+        result = None
+        while not state.stop_event.is_set():
+            result = _find_window(title_query, bool(self.config.get("activate", True)))
+            if result:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            state.update_status(f"창 대기 중... {remaining:.1f}초 남음")
+            state.stop_event.wait(min(interval, remaining))
+        if state.stop_event.is_set():
+            return "output_pin"
         if not result:
-            raise RuntimeError(f"창을 찾을 수 없습니다: {self.config.get('title', '')}")
+            raise RuntimeError(f"{timeout:g}초 안에 창을 찾을 수 없습니다: {title_query}")
         title, rect = result
         macro_state["window_title"] = title
         macro_state["window_rect"] = rect
@@ -133,6 +177,8 @@ class WindowNode(BaseNode):
     def get_schema(self):
         return {
             "title": {"type": "text", "label": "창 제목 포함", "default": ""},
+            "timeout": {"type": "number", "label": "최대 대기(s)", "default": 10.0, "min": 0, "step": 0.5},
+            "poll_interval": {"type": "number", "label": "재탐색 간격(s)", "default": 0.2, "min": 0.05, "step": 0.05},
             "activate": {"type": "checkbox", "label": "창 활성화", "default": True},
         }
 
@@ -156,8 +202,8 @@ class CoordNode(BaseNode):
 
     def get_schema(self):
         return {
-            "x": {"type": "number", "label": "X", "default": 0},
-            "y": {"type": "number", "label": "Y", "default": 0},
+            "x": {"type": "number", "label": "X", "default": 0, "step": 1},
+            "y": {"type": "number", "label": "Y", "default": 0, "step": 1},
             "relative_to_window": {
                 "type": "checkbox",
                 "label": "창 기준 좌표",
@@ -186,7 +232,7 @@ class WaitNode(BaseNode):
 
     def get_schema(self):
         return {
-            "ms": {"type": "number", "label": "ms", "default": 1000}
+            "ms": {"type": "number", "label": "ms", "default": 1000, "min": 0, "step": 1}
         }
 
 
@@ -245,8 +291,10 @@ class BaseImageNode(BaseNode):
                         origin_x + center.x + offset_x,
                         origin_y + center.y + offset_y,
                     )
-            except Exception:
+            except pyautogui.ImageNotFoundException:
                 pass
+            except Exception as exc:
+                raise RuntimeError(f"이미지 탐색 오류: {exc}") from exc
 
             if time.time() - start_time >= max_wait:
                 break
@@ -256,13 +304,13 @@ class BaseImageNode(BaseNode):
 
     def _image_schema(self, include_offset=True):
         schema = {
-            "wait_time": {"type": "number", "label": "검색(초)", "default": 5.0},
-            "interval": {"type": "number", "label": "간격(s)", "default": 0.1},
-            "threshold": {"type": "number", "label": "감도", "default": 0.8},
+            "wait_time": {"type": "number", "label": "검색(초)", "default": 5.0, "min": 0, "step": 0.1},
+            "interval": {"type": "number", "label": "간격(s)", "default": 0.1, "min": 0, "step": 0.05},
+            "threshold": {"type": "number", "label": "감도", "default": 0.8, "min": 0, "max": 1, "step": 0.01},
         }
         if include_offset:
-            schema["offset_x"] = {"type": "number", "label": "X 오프셋(중앙)", "default": 0}
-            schema["offset_y"] = {"type": "number", "label": "Y 오프셋(중앙)", "default": 0}
+            schema["offset_x"] = {"type": "number", "label": "X 오프셋(중앙)", "default": 0, "step": 1}
+            schema["offset_y"] = {"type": "number", "label": "Y 오프셋(중앙)", "default": 0, "step": 1}
         return schema
 
 
@@ -305,33 +353,23 @@ class MouseClickNode(BaseNode):
 
     def execute(self, macro_state):
         pos = macro_state.get("target_pos")
-        btn_type = self.config.get("button", "좌클릭")
+        btn_type = self.config.get("button", "left")
         duration = self.config.get("duration", 0.0)
+        interval = self.config.get("interval", 0.1)
 
         if pos:
             x, y = pos
-            if btn_type == "좌클릭":
+            if btn_type == "double":
+                pyautogui.doubleClick(x, y, interval=interval)
+            elif btn_type in {"left", "right", "middle"}:
                 if duration > 0:
-                    print(f"좌클릭 꾹 누르기: {duration}s 위치: ({x}, {y})")
-                    pyautogui.mouseDown(x, y, button="left")
+                    pyautogui.mouseDown(x, y, button=btn_type)
                     try:
                         state.stop_event.wait(duration)
                     finally:
-                        pyautogui.mouseUp(x, y, button="left")
+                        pyautogui.mouseUp(x, y, button=btn_type)
                 else:
-                    pyautogui.click(x, y)
-            elif btn_type == "우클릭":
-                if duration > 0:
-                    print(f"우클릭 꾹 누르기: {duration}s 위치: ({x}, {y})")
-                    pyautogui.mouseDown(x, y, button="right")
-                    try:
-                        state.stop_event.wait(duration)
-                    finally:
-                        pyautogui.mouseUp(x, y, button="right")
-                else:
-                    pyautogui.rightClick(x, y)
-            elif btn_type == "더블클릭":
-                pyautogui.doubleClick(x, y)
+                    pyautogui.click(x, y, button=btn_type)
             print(f"마우스 클릭 실행: {btn_type} 위치: ({x}, {y})")
         else:
             print("에러: 클릭할 목표 좌표가 없습니다.")
@@ -342,13 +380,22 @@ class MouseClickNode(BaseNode):
             "button": {
                 "type": "select",
                 "label": "버튼",
-                "options": ["좌클릭", "우클릭", "더블클릭"],
-                "default": "좌클릭",
+                "options": ["left", "right", "middle", "double"],
+                "default": "left",
             },
             "duration": {
                 "type": "number",
                 "label": "지속 시간(s)",
                 "default": 0.0,
+                "min": 0,
+                "step": 0.1,
+            },
+            "interval": {
+                "type": "number",
+                "label": "더블클릭 간격(s)",
+                "default": 0.1,
+                "min": 0,
+                "step": 0.01,
             },
         }
 
@@ -374,7 +421,7 @@ class LoopNode(BaseNode):
 
     def get_schema(self):
         return {
-            "max_count": {"type": "number", "label": "횟수", "default": 5}
+            "max_count": {"type": "number", "label": "횟수", "default": 5, "min": 1, "step": 1}
         }
 
 
@@ -396,8 +443,8 @@ class KeyboardNode(BaseNode):
         return [self._normalize_key(k) for k in keys if k]
 
     def execute(self, macro_state):
-        mode = self.config.get("mode", "단축키")
-        if mode == "단축키":
+        mode = self.config.get("mode", "hotkey")
+        if mode == "hotkey":
             valid_keys = self._get_keys()
             if valid_keys:
                 pyautogui.hotkey(*valid_keys)
@@ -417,8 +464,8 @@ class KeyboardNode(BaseNode):
             "mode": {
                 "type": "select",
                 "label": "모드",
-                "options": ["단축키", "문자열"],
-                "default": "단축키",
+                "options": ["hotkey", "text"],
+                "default": "hotkey",
             },
             "keys": {
                 "type": "text",
@@ -440,6 +487,8 @@ class KeyboardNode(BaseNode):
                 "type": "number",
                 "label": "간격(s)",
                 "default": 0.05,
+                "min": 0,
+                "step": 0.01,
             },
         }
 
@@ -460,7 +509,7 @@ class MouseMoveNode(BaseNode):
 
     def get_schema(self):
         return {
-            "duration": {"type": "number", "label": "시간(s)", "default": 0.2}
+            "duration": {"type": "number", "label": "시간(s)", "default": 0.2, "min": 0, "step": 0.1}
         }
 
 
@@ -471,12 +520,17 @@ class MouseScrollNode(BaseNode):
     def execute(self, macro_state):
         amt = self.config.get("amount", -100)
         print(f"마우스 스크롤: {amt}")
-        pyautogui.scroll(amt)
+        native_amount = amt * 120 if os.name == "nt" else amt
+        if self.config.get("axis", "vertical") == "horizontal":
+            pyautogui.hscroll(native_amount)
+        else:
+            pyautogui.scroll(native_amount)
         return "output_pin"
 
     def get_schema(self):
         return {
-            "amount": {"type": "number", "label": "양", "default": -100}
+            "axis": {"type": "select", "label": "방향", "options": ["vertical", "horizontal"], "default": "vertical"},
+            "amount": {"type": "number", "label": "휠 칸", "default": -1, "step": 1},
         }
 
 
@@ -487,14 +541,16 @@ class MouseDragNode(BaseNode):
     def execute(self, macro_state):
         pos = macro_state.get("target_pos")
         dur = self.config.get("duration", 0.5)
+        button = self.config.get("button", "left")
         if pos:
             print(f"마우스 드래그 시작: {pyautogui.position()} -> 끝: {pos}")
-            pyautogui.dragTo(pos[0], pos[1], duration=dur)
+            pyautogui.dragTo(pos[0], pos[1], duration=dur, button=button)
         else:
             print("에러: 드래그할 목표 좌표가 없습니다.")
         return "output_pin"
 
     def get_schema(self):
         return {
-            "duration": {"type": "number", "label": "시간(s)", "default": 0.5}
+            "button": {"type": "select", "label": "버튼", "options": ["left", "right", "middle"], "default": "left"},
+            "duration": {"type": "number", "label": "시간(s)", "default": 0.5, "min": 0, "step": 0.1}
         }

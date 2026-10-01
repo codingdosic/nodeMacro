@@ -22,6 +22,7 @@ wheels/
 *.egg
 venv/
 .venv/
+.venv-build/
 
 # --- IDE & OS ---
 .vscode/
@@ -34,12 +35,5 @@ scripts/
 assets/
 fonts/
 frontend/build_*.txt
-*.spec
-
-# --- Documentation ---
-# 모든 마크다운 파일 및 docs 폴더 무시
-*.md
-docs/
-
-# README.md만 예외적으로 포함
-!README.md
+release/
+legacy/**/__pycache__/

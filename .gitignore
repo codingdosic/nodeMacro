@@ -36,4 +36,4 @@ assets/
 fonts/
 frontend/build_*.txt
 release/
-legacy/**/__pycache__/
+legacy/

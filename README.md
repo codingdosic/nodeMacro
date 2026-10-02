@@ -8,8 +8,6 @@ automation tool published by `d051c`.
 > availability corresponding to official binaries. Public source access does
 > not grant commercial use or redistribution rights. See [LICENSE](./LICENSE).
 
-[한국어 문서](./docs/README.md)
-
 ![D5 Macro node editor](imgs/overview.png)
 
 ## Features
@@ -149,7 +147,6 @@ frontend/  React, Vite, and React Flow editor
 branding/  Application icons
 installer/ Inno Setup definition
 imgs/      Current product screenshots and demonstrations
-legacy/    Obsolete versions and experiments excluded from releases
 ```
 
 ## Privacy, security, and licensing

@@ -1,7 +1,7 @@
 # D5 Macro
 
-D5 Macro is a local Windows automation tool with a browser-based visual node
-editor. It is published by `d051c`.
+Build custom Windows macros visually—no coding required. D5 Macro is a local
+automation tool published by `d051c`.
 
 > **Status:** Version 1.0.5 release candidate for Windows 10/11 x64. This
 > repository is public for portfolio review, security review, and source
@@ -14,19 +14,15 @@ editor. It is published by `d051c`.
 
 ## Features
 
-- Visual node editor powered by React Flow
-- Mouse clicks, movement, scrolling, dragging, and keyboard input
-- Editable recording of mouse and keyboard actions with timing
-- Compressed cursor paths with hover pauses preserved
-- Multi-monitor image matching and selectable search regions
-- Image conditions, branches, and loops
-- Window selection and window-relative coordinates
-- Visual running, completed, and error states for nodes
-- JSON save/load with captured images
-- One-click script folder access and optional launcher batch files
+- Visual node-based editor
+- Mouse and keyboard automation, with image matching, conditions, loops, and
+  window-relative actions for multi-step workflows
+- Multi-monitor support
+- Live execution status and logs
+- Save and load reusable scripts, with optional one-click launcher batch files
 - Korean and English interface
-- Configurable recording stop and emergency stop keys
-- Local-only storage with no account, subscription, ads, or telemetry
+
+Incremental usability and reliability updates are planned after release.
 
 ## See it in action
 

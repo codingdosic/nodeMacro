@@ -8,7 +8,7 @@ from pathlib import Path
 
 APP_NAME = "D5 Macro"
 APP_ID = "d5macro"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.5"
 SCRIPT_FORMAT = "d5macro"
 SCRIPT_SCHEMA_VERSION = 1
 HOST = "127.0.0.1"

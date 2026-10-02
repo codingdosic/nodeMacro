@@ -46,6 +46,20 @@ class ReleaseBoundaryTests(unittest.TestCase):
         self.assertEqual(saved["format"], SCRIPT_FORMAT)
         self.assertEqual(saved["schema_version"], SCRIPT_SCHEMA_VERSION)
 
+    def test_saved_script_can_be_deleted_with_its_folder(self):
+        self.client.post(
+            "/api/scripts/save",
+            headers=self.authorized(),
+            json={"name": "delete-test", "macro_data": {"nodes": [], "edges": []}},
+        )
+        response = self.client.post(
+            "/api/scripts/delete",
+            headers=self.authorized(),
+            json={"path": "delete-test/delete-test.json"},
+        )
+        self.assertEqual(response.json()["status"], "deleted")
+        self.assertFalse((SCRIPTS_DIR / "delete-test").exists())
+
     @patch("backend.main.os.startfile")
     def test_open_scripts_folder_uses_fixed_directory(self, startfile):
         response = self.client.post("/api/scripts/open-folder", headers=self.authorized())

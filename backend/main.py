@@ -16,7 +16,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from backend.nodes.action_nodes import (
     StartNode, LaunchNode, CoordNode, WaitNode, ImageNode, MouseClickNode,
-    LoopNode, IfNode, KeyboardNode, MouseMoveNode, MouseScrollNode, MouseDragNode,
+    LoopNode, IfNode, KeyboardNode, MouseMoveNode, MouseSequenceNode, MouseScrollNode, MouseDragNode,
     WindowNode,
 )
 from backend.engine.executor import Executor
@@ -324,6 +324,7 @@ NODE_MAP = {
     "loop": LoopNode,
     "if": IfNode,
     "mouse_move": MouseMoveNode,
+    "mouse_sequence": MouseSequenceNode,
     "mouse_scroll": MouseScrollNode,
     "mouse_drag": MouseDragNode
 }
@@ -359,10 +360,15 @@ async def startup_event():
     global main_loop
     main_loop = asyncio.get_running_loop()
 
-    def threadsafe_status_update(message):
+    def threadsafe_status_update(message, key=None, params=None):
         if main_loop and not main_loop.is_closed():
             asyncio.run_coroutine_threadsafe(
-                manager.broadcast({"type": "status", "message": message}),
+                manager.broadcast({
+                    "type": "status",
+                    "message": message,
+                    "key": key,
+                    "params": params or {},
+                }),
                 main_loop
             )
 
@@ -519,6 +525,30 @@ def open_scripts_folder():
     os.makedirs(SCRIPTS_DIR, exist_ok=True)
     os.startfile(SCRIPTS_DIR)
     return {"status": "opened"}
+
+
+@app.post("/api/scripts/delete")
+async def delete_script(request: Request):
+    body = await request.json()
+    rel_path = str(body.get("path") or "").strip().replace("\\", "/")
+    if not rel_path.endswith(".json") or rel_path.startswith("/") or ".." in rel_path.split("/"):
+        return JSONResponse({"status": "error", "message": "Invalid path"}, status_code=400)
+
+    scripts_root = os.path.realpath(SCRIPTS_DIR)
+    script_path = os.path.realpath(os.path.join(scripts_root, rel_path.replace("/", os.sep)))
+    try:
+        if os.path.commonpath([script_path, scripts_root]) != scripts_root or not os.path.isfile(script_path):
+            raise ValueError
+    except ValueError:
+        return JSONResponse({"status": "error", "message": "File not found"}, status_code=404)
+
+    script_folder = os.path.dirname(script_path)
+    script_name = os.path.splitext(os.path.basename(script_path))[0]
+    if script_folder != scripts_root and os.path.basename(script_folder).casefold() == script_name.casefold():
+        shutil.rmtree(script_folder)
+    else:
+        os.remove(script_path)
+    return {"status": "deleted", "path": rel_path}
 
 @app.post("/api/scripts/save")
 async def save_script(request: Request):
@@ -739,11 +769,19 @@ def start_coordinate(req: CoordinateRequest):
     from backend.engine import capture
 
     _coordinate_results.pop(req.node_id, None)
-    state.update_status("좌표 선택 모드: 클릭 또는 F8 확정 / Esc 취소")
+    state.update_status(
+        "좌표 선택 모드: 클릭 또는 F8 확정 / Esc 취소",
+        "status_coordinate_mode",
+    )
 
     def on_coordinate_picked(x, y):
         _coordinate_results[req.node_id] = {"x": int(x), "y": int(y)}
-        state.update_status(f"좌표 선택됨: ({x}, {y})")
+        state.update_status(
+            f"좌표 선택됨: ({x}, {y})",
+            "status_coordinate_selected",
+            x=x,
+            y=y,
+        )
         if main_loop and not main_loop.is_closed():
             asyncio.run_coroutine_threadsafe(
                 manager.broadcast({
@@ -757,7 +795,7 @@ def start_coordinate(req: CoordinateRequest):
 
     def on_coordinate_cancelled():
         _coordinate_results[req.node_id] = {"cancelled": True}
-        state.update_status("좌표 선택 취소됨")
+        state.update_status("좌표 선택 취소됨", "status_coordinate_cancelled")
         if main_loop and not main_loop.is_closed():
             asyncio.run_coroutine_threadsafe(
                 manager.broadcast({

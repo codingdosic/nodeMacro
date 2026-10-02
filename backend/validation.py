@@ -78,6 +78,27 @@ def validate_macro(nodes, links, node_map):
             value = config.get("keys", ["enter"]) if mode == "hotkey" else config.get("string", "")
             if not value:
                 add("warning", "empty_keyboard", "입력할 키 또는 문자열이 비어 있습니다.", node_id)
+        if node_type == "mouse_sequence":
+            steps = config.get("steps")
+            if not isinstance(steps, list) or not steps:
+                add("error", "empty_mouse_sequence", "마우스 이동 기록이 비어 있습니다.", node_id)
+            elif len(steps) > 5000:
+                add("error", "mouse_sequence_too_long", "마우스 이동 기록이 너무 깁니다.", node_id)
+            else:
+                for step in steps:
+                    if not isinstance(step, dict) or step.get("op") not in {"move", "wait"}:
+                        add("error", "invalid_mouse_sequence", "마우스 이동 기록 형식이 올바르지 않습니다.", node_id)
+                        break
+                    try:
+                        values = (
+                            (float(step.get("x")), float(step.get("y")), float(step.get("duration_ms")))
+                            if step["op"] == "move" else (float(step.get("ms")),)
+                        )
+                        if any(not math.isfinite(value) for value in values) or values[-1] < 0:
+                            raise ValueError
+                    except (TypeError, ValueError):
+                        add("error", "invalid_mouse_sequence", "마우스 이동 기록에 잘못된 수치가 있습니다.", node_id)
+                        break
 
     if len(starts) != 1:
         add("error", "start_count", "시작 노드는 정확히 하나여야 합니다.", starts[0] if starts else None)

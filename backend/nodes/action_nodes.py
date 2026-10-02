@@ -1,4 +1,7 @@
+import ctypes
+import math
 import os
+from ctypes import wintypes
 
 import pyautogui
 import time
@@ -6,6 +9,55 @@ from backend.nodes.base_node import BaseNode
 from backend.engine import state
 
 pyautogui.PAUSE = 0
+
+
+class _MouseInput(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG), ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else wintypes.DWORD),
+    ]
+
+
+class _Input(ctypes.Structure):
+    _fields_ = [("type", wintypes.DWORD), ("mi", _MouseInput)]
+
+
+def _send_mouse_move(x, y):
+    """실제 입력 스트림으로 가상 데스크톱 절대좌표 이동을 전송."""
+    if os.name != "nt":
+        pyautogui.moveTo(x, y)
+        return
+    user32 = ctypes.windll.user32
+    left, top = user32.GetSystemMetrics(76), user32.GetSystemMetrics(77)
+    width, height = user32.GetSystemMetrics(78), user32.GetSystemMetrics(79)
+    if width <= 1 or height <= 1:
+        pyautogui.moveTo(x, y)
+        return
+    x = min(max(round(x), left), left + width - 1)
+    y = min(max(round(y), top), top + height - 1)
+    event = _Input(0, _MouseInput(
+        round((x - left) * 65535 / (width - 1)),
+        round((y - top) * 65535 / (height - 1)),
+        0, 0x0001 | 0x4000 | 0x8000, 0, 0,
+    ))
+    if user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(event)) != 1:
+        pyautogui.moveTo(x, y)
+
+
+def _wait_with_countdown(seconds, label="다음 동작까지", status_key="status_next_action"):
+    deadline = time.monotonic() + max(0, float(seconds))
+    shown = None
+    while not state.stop_event.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        seconds_left = max(1, math.ceil(remaining))
+        if seconds_left != shown:
+            state.update_status(f"{label} {seconds_left}초", status_key, seconds=seconds_left)
+            shown = seconds_left
+        state.stop_event.wait(min(0.1, remaining))
 
 
 def _set_clipboard_text(text: str) -> bool:
@@ -55,33 +107,70 @@ def _type_text(text: str, interval: float = 0.05):
         print("에러: 한글/유니코드 문자열을 입력하지 못했습니다 (클립보드 실패).")
 
 
-def _find_window(title_query, activate=False):
-    """제목에 title_query가 포함된 첫 번째 표시 창의 좌표를 반환."""
+def _find_window(title_query, activate=False, process_name="", class_name=""):
+    """일반 앱 창을 프로세스/클래스로 찾고 제목은 후보 구분용으로만 사용."""
     import ctypes
     from ctypes import wintypes
 
     user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     matches = []
     query = (title_query or "").strip().casefold()
-    if not query:
+    process_query = (process_name or "").strip().casefold()
+    class_query = (class_name or "").strip().casefold()
+    if not query and not process_query and not class_query:
         return None
+
+    def process_for(hwnd):
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        handle = kernel32.OpenProcess(0x1000, False, pid.value)
+        if not handle:
+            return ""
+        try:
+            size = wintypes.DWORD(32768)
+            path = ctypes.create_unicode_buffer(size.value)
+            if kernel32.QueryFullProcessImageNameW(handle, 0, path, ctypes.byref(size)):
+                return os.path.basename(path.value).casefold()
+            return ""
+        finally:
+            kernel32.CloseHandle(handle)
 
     @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
     def collect(hwnd, _):
+        if not user32.IsWindowVisible(hwnd):
+            return True
         length = user32.GetWindowTextLengthW(hwnd)
-        if length and user32.IsWindowVisible(hwnd):
-            buffer = ctypes.create_unicode_buffer(length + 1)
-            user32.GetWindowTextW(hwnd, buffer, length + 1)
-            if query in buffer.value.casefold():
-                matches.append((hwnd, buffer.value))
-                return False
+        if not length:
+            return True
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buffer, length + 1)
+        window_class = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, window_class, len(window_class))
+        if process_query and process_for(hwnd) != process_query:
+            return True
+        if class_query and window_class.value.casefold() != class_query:
+            return True
+        if not process_query and not class_query and query not in buffer.value.casefold():
+            return True
+        matches.append((hwnd, buffer.value))
         return True
 
     user32.EnumWindows(collect, 0)
     if not matches:
         return None
 
-    hwnd, title = matches[0]
+    if process_query or class_query:
+        exact = [item for item in matches if item[1].casefold() == query]
+        partial = [item for item in matches if query and query in item[1].casefold()]
+        candidates = exact or partial or matches
+        if len(candidates) != 1:
+            return None
+        hwnd, title = candidates[0]
+    else:
+        hwnd, title = matches[0]
     if activate:
         if user32.IsIconic(hwnd):
             user32.ShowWindow(hwnd, 9)  # SW_RESTORE
@@ -109,7 +198,7 @@ class StartNode(BaseNode):
         delay = self.config.get("delay", 0)
         if delay > 0:
             print(f"매크로 시작 전 {delay}ms 대기 중...")
-            state.stop_event.wait(delay / 1000.0)
+            _wait_with_countdown(delay / 1000.0, "매크로 시작까지", "status_macro_starts_in")
         print("매크로 실행을 시작합니다.")
         return "output_pin"
 
@@ -157,13 +246,22 @@ class WindowNode(BaseNode):
         deadline = time.monotonic() + timeout
         result = None
         while not state.stop_event.is_set():
-            result = _find_window(title_query, bool(self.config.get("activate", True)))
+            result = _find_window(
+                title_query,
+                bool(self.config.get("activate", True)),
+                self.config.get("process", ""),
+                self.config.get("class_name", ""),
+            )
             if result:
                 break
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            state.update_status(f"창 대기 중... {remaining:.1f}초 남음")
+            state.update_status(
+                f"창 대기 중... {remaining:.1f}초 남음",
+                "status_window_waiting",
+                seconds=f"{remaining:.1f}",
+            )
             state.stop_event.wait(min(interval, remaining))
         if state.stop_event.is_set():
             return "output_pin"
@@ -172,6 +270,8 @@ class WindowNode(BaseNode):
         title, rect = result
         macro_state["window_title"] = title
         macro_state["window_rect"] = rect
+        macro_state["window_process"] = self.config.get("process", "")
+        macro_state["window_class"] = self.config.get("class_name", "")
         return "output_pin"
 
     def get_schema(self):
@@ -220,14 +320,7 @@ class WaitNode(BaseNode):
         ms = self.config.get("ms", 1000)
         total_sec = ms / 1000.0
         print(f"대기 노드: {ms}ms 대기 중...")
-
-        start_time = time.time()
-        while time.time() - start_time < total_sec:
-            remaining = total_sec - (time.time() - start_time)
-            state.update_status(f"대기 중... {remaining:.1f}초 남음")
-            if state.stop_event.wait(min(0.1, remaining)):
-                break
-
+        _wait_with_countdown(total_sec)
         return "output_pin"
 
     def get_schema(self):
@@ -513,6 +606,40 @@ class MouseMoveNode(BaseNode):
         }
 
 
+class MouseSequenceNode(BaseNode):
+    node_type = "mouse_sequence"
+    node_label = "마우스 이동 시퀀스"
+
+    def execute(self, macro_state):
+        last_pos = None
+        for step in self.config.get("steps") or []:
+            if state.stop_event.is_set():
+                break
+            if step.get("op") == "wait":
+                seconds = max(0, float(step.get("ms", 0))) / 1000
+                if last_pos and seconds >= 0.25:
+                    if state.stop_event.wait(0.1):
+                        break
+                    _send_mouse_move(last_pos[0] + 1, last_pos[1])
+                    if state.stop_event.wait(0.01):
+                        break
+                    _send_mouse_move(*last_pos)
+                state.stop_event.wait(seconds)
+                continue
+            if step.get("op") != "move":
+                continue
+            x, y = float(step.get("x", 0)), float(step.get("y", 0))
+            duration = max(0, float(step.get("duration_ms", 0))) / 1000
+            if math.isfinite(x) and math.isfinite(y) and math.isfinite(duration):
+                _send_mouse_move(x, y)
+                state.stop_event.wait(duration)
+                last_pos = (x, y)
+        return "output_pin"
+
+    def get_schema(self):
+        return {}
+
+
 class MouseScrollNode(BaseNode):
     node_type = "mouse_scroll"
     node_label = "마우스 스크롤"
@@ -545,6 +672,15 @@ class MouseDragNode(BaseNode):
         if pos:
             print(f"마우스 드래그 시작: {pyautogui.position()} -> 끝: {pos}")
             pyautogui.dragTo(pos[0], pos[1], duration=dur, button=button)
+            if macro_state.get("window_rect"):
+                window = _find_window(
+                    macro_state.get("window_title", ""),
+                    False,
+                    macro_state.get("window_process", ""),
+                    macro_state.get("window_class", ""),
+                )
+                if window:
+                    macro_state["window_title"], macro_state["window_rect"] = window
         else:
             print("에러: 드래그할 목표 좌표가 없습니다.")
         return "output_pin"

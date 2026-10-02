@@ -1,5 +1,7 @@
+import ctypes
 import os
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from PIL import Image
@@ -7,8 +9,8 @@ from PIL import Image
 from backend.engine import state
 from backend.engine.executor import Executor
 from backend.nodes.action_nodes import (
-    CoordNode, ImageNode, LaunchNode, MouseClickNode, MouseDragNode,
-    MouseScrollNode, WaitNode, WindowNode,
+    CoordNode, ImageNode, KeyboardNode, LaunchNode, MouseClickNode, MouseDragNode,
+    MouseScrollNode, MouseSequenceNode, WaitNode, WindowNode, _Input, _send_mouse_move,
 )
 
 
@@ -36,6 +38,15 @@ class RegressionTests(unittest.TestCase):
         state.stop_event.set()
         self.assertEqual(WaitNode("wait", {"ms": 60_000}).execute({}), "output_pin")
 
+    def test_wait_reports_topbar_countdown(self):
+        with patch.object(state, "update_status") as update_status:
+            WaitNode("wait", {"ms": 10}).execute({})
+        update_status.assert_called_with(
+            "다음 동작까지 1초",
+            "status_next_action",
+            seconds=1,
+        )
+
     @patch("backend.nodes.action_nodes.pyautogui.click")
     def test_middle_click(self, click):
         MouseClickNode("mouse", {"button": "middle"}).execute({"target_pos": (10, 20)})
@@ -47,11 +58,76 @@ class RegressionTests(unittest.TestCase):
             MouseScrollNode("scroll", {"amount": -8}).execute({})
         scroll.assert_called_once_with(-960)
 
+    @patch("backend.nodes.action_nodes._send_mouse_move")
+    def test_mouse_sequence_replays_embedded_moves(self, move_to):
+        MouseSequenceNode("path", {"steps": [
+            {"op": "move", "x": 10, "y": 20, "duration_ms": 50},
+            {"op": "wait", "ms": 0},
+            {"op": "move", "x": 30, "y": 40, "duration_ms": 100},
+        ]}).execute({})
+        self.assertEqual(move_to.call_count, 2)
+        move_to.assert_any_call(10.0, 20.0)
+
+    @patch("backend.nodes.action_nodes._send_mouse_move")
+    def test_mouse_sequence_accepts_one_millisecond_move(self, move_to):
+        MouseSequenceNode("path", {"steps": [
+            {"op": "move", "x": 10, "y": 20, "duration_ms": 1},
+        ]}).execute({})
+        move_to.assert_called_once_with(10.0, 20.0)
+
+    def test_send_input_uses_virtual_desktop_coordinates(self):
+        captured = {}
+
+        def send_input(_count, pointer, _size):
+            event = ctypes.cast(pointer, ctypes.POINTER(_Input)).contents
+            captured["move"] = (event.mi.dx, event.mi.dy, event.mi.dwFlags)
+            return 1
+
+        metrics = {76: -1920, 77: 0, 78: 3840, 79: 1080}
+        user32 = SimpleNamespace(
+            GetSystemMetrics=lambda key: metrics[key],
+            SendInput=send_input,
+        )
+        with patch("backend.nodes.action_nodes.ctypes.windll.user32", user32):
+            _send_mouse_move(-1920, 0)
+        self.assertEqual(captured["move"], (0, 0, 0x0001 | 0x4000 | 0x8000))
+
+    @patch.object(state.stop_event, "wait", return_value=False)
+    @patch("backend.nodes.action_nodes._send_mouse_move")
+    def test_mouse_sequence_refreshes_recorded_hover(self, move_to, _wait):
+        MouseSequenceNode("path", {"steps": [
+            {"op": "move", "x": 10, "y": 20, "duration_ms": 50},
+            {"op": "wait", "ms": 500},
+        ]}).execute({})
+        self.assertEqual(
+            [call.args for call in move_to.call_args_list],
+            [(10.0, 20.0), (11.0, 20.0), (10.0, 20.0)],
+        )
+
+    @patch("backend.nodes.action_nodes.pyautogui.hotkey")
+    def test_hangul_key_is_replayed(self, hotkey):
+        KeyboardNode("key", {"mode": "hotkey", "keys": ["hangul"]}).execute({})
+        hotkey.assert_called_once_with("hangul")
+
     @patch("backend.nodes.action_nodes.pyautogui.dragTo")
     @patch("backend.nodes.action_nodes.pyautogui.position", return_value=(0, 0))
     def test_drag_preserves_button(self, _position, drag_to):
         MouseDragNode("drag", {"button": "right", "duration": 0.4}).execute({"target_pos": (10, 20)})
         drag_to.assert_called_once_with(10, 20, duration=0.4, button="right")
+
+    @patch("backend.nodes.action_nodes._find_window", return_value=("Chrome", (1920, 0, 2920, 800)))
+    @patch("backend.nodes.action_nodes.pyautogui.dragTo")
+    @patch("backend.nodes.action_nodes.pyautogui.position", return_value=(10, 10))
+    def test_drag_refreshes_window_relative_origin(self, _position, _drag_to, _find_window):
+        macro_state = {
+            "target_pos": (2000, 20),
+            "window_title": "Chrome",
+            "window_rect": (0, 0, 1000, 800),
+            "window_process": "chrome.exe",
+            "window_class": "Chrome_WidgetWin_1",
+        }
+        MouseDragNode("drag", {"duration": 0}).execute(macro_state)
+        self.assertEqual(macro_state["window_rect"], (1920, 0, 2920, 800))
 
     @patch("backend.nodes.action_nodes._find_window")
     def test_window_relative_coordinate(self, find_window):

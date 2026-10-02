@@ -7,7 +7,7 @@ const NodePalette = ({ uiLanguage }) => {
 
   useEffect(() => {
     api.get('/nodes/types')
-      .then(res => setNodeTypes(res.data))
+      .then(res => setNodeTypes(res.data.filter((node) => node.type !== 'mouse_sequence')))
       .catch(err => console.error("Failed to load node types", err));
   }, []);
 

@@ -16,12 +16,12 @@ stop_event = threading.Event()
 status_callback = None
 execution_callback = None
 
-def update_status(message):
+def update_status(message, key=None, **params):
     """현재 실행 상태를 알림"""
     if message:
         print(f"[STATUS] {message}")
     if status_callback:
-        status_callback(message)
+        status_callback(message, key, params)
 
 def update_execution(node_id, phase, message=None):
     """노드 실행 상태를 UI에 알림."""

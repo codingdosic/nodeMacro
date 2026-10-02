@@ -1,149 +1,180 @@
 # D5 Macro
 
-D5 Macro는 브라우저 기반 노드 편집기로 Windows 작업을 자동화하는 로컬 매크로 도구입니다. 게시자 표기는 `d051c`입니다.
+D5 Macro is a local Windows automation tool with a browser-based visual node
+editor. It is published by `d051c`.
 
-> **현재 상태:** Windows 10/11 x64용 1.0.0 출시 후보입니다. 이 저장소는
-> 포트폴리오, 보안 검토와 공식 바이너리의 소스 대응을 위해 공개되어 있습니다.
-> 코드가 공개되어 있다는 사실만으로 상업적 이용·재배포 권한이 부여되지는
-> 않습니다. 자세한 조건은 [LICENSE](./LICENSE)를 확인하세요.
+> **Status:** Version 1.0.5 release candidate for Windows 10/11 x64. This
+> repository is public for portfolio review, security review, and source
+> availability corresponding to official binaries. Public source access does
+> not grant commercial use or redistribution rights. See [LICENSE](./LICENSE).
 
-## 주요 기능
+[한국어 문서](./docs/README.md)
 
-- React Flow 기반 노드 편집기
-- 마우스 클릭·이동·스크롤·드래그와 키보드 입력
-- 멀티모니터 이미지 검색 및 검색 영역 지정
-- 이미지 조건 분기와 반복
-- 창 제목으로 대상 창 선택 및 창 상대 좌표 사용
-- 실행 중·완료·오류 노드 시각 표시
-- 마우스·키보드 동작과 시간 간격을 편집 가능한 노드로 녹화
-- JSON 저장/불러오기와 캡처 이미지 묶음 저장
-- 편집기 실행 및 저장 매크로 직접 실행용 배치 파일
-- ESC 비상 중단
+![D5 Macro node editor](imgs/overview.png)
 
-## 데모
+## Features
 
-### 노드 편집기
+- Visual node editor powered by React Flow
+- Mouse clicks, movement, scrolling, dragging, and keyboard input
+- Editable recording of mouse and keyboard actions with timing
+- Compressed cursor paths with hover pauses preserved
+- Multi-monitor image matching and selectable search regions
+- Image conditions, branches, and loops
+- Window selection and window-relative coordinates
+- Visual running, completed, and error states for nodes
+- JSON save/load with captured images
+- One-click script folder access and optional launcher batch files
+- Korean and English interface
+- Configurable recording stop and emergency stop keys
+- Local-only storage with no account, subscription, ads, or telemetry
 
-![NodeMacro 편집기](demo/main.gif)
+## See it in action
 
-### 기본 매크로 실행
+### Create and connect nodes
 
-![기본 매크로 실행](demo/basic.gif)
+![Creating and connecting nodes](imgs/connecting.gif)
 
-### 이미지 조건 분기 실행
+### Capture an image, find it, and move the cursor
 
-![이미지 조건 분기 실행](demo/ifNode.gif)
+![Image capture and mouse movement](imgs/capture.gif)
 
-### 이미지 조건 분기 노드 구성
+### Record typing in Notepad and replay it
 
-![이미지 조건 분기 노드 구성](demo/ifNodeImg.png)
+![Recording and replaying keyboard input](imgs/recording.gif)
 
-## 사용자 설치
+### Built-in tutorial
 
-릴리스의 `D5Macro-Setup-<버전>.exe`를 실행한 뒤 시작 메뉴 또는 바탕화면의 **D5 Macro**를 열면 됩니다. Python이나 Node.js는 필요하지 않습니다. 앱은 트레이에서 다시 열거나 종료할 수 있습니다.
+![D5 Macro tutorial](imgs/tutorial.png)
 
-공식 서명된 설치 파일이 게시되기 전에는 이 저장소의 소스 빌드를 사용하세요.
-출처가 다른 설치 파일이나 매크로 JSON·배치 파일은 실행하지 마세요.
+## Installation
 
-사용자 데이터는 프로그램과 분리됩니다.
+Run `D5Macro-Setup-<version>.exe`, then open **D5 Macro** from the Start menu
+or desktop shortcut. Python and Node.js are not required. The app can be
+reopened or closed from the system tray.
+
+Until an Authenticode-signed installer is published, Windows SmartScreen may
+show an unknown publisher warning. Only use an installer from the official
+release or purchase page, and verify its published SHA-256 checksum. Do not
+run macro JSON or batch files from untrusted sources.
+
+User data is stored separately from the application:
 
 ```text
-문서\D5Macro\scripts            매크로와 저장 이미지
-%LOCALAPPDATA%\D5Macro          설정, 로그, 임시 캡처
+Documents\D5Macro\scripts    Macros and saved images
+%LOCALAPPDATA%\D5Macro       Settings, logs, and temporary captures
 ```
 
-제거 시 사용자 데이터도 삭제할지 선택할 수 있으며 기본적으로 보존됩니다.
+The uninstaller asks whether to remove user data and preserves it by default.
 
-## 개발 환경
+## Quick start
 
-Python 3.11과 Node.js 22.12+가 필요합니다.
+1. Open D5 Macro and follow the built-in tutorial.
+2. Drag nodes from the left panel and connect them in execution order, or
+   press **Record** to convert real input into editable nodes.
+3. Press **Run** and switch to the target application.
+4. Use the configured emergency stop key if an action targets the wrong place.
+
+Press the `?` button in a node header to see its behavior and defaults.
+
+## Recording
+
+1. Press **Record** and switch to the target application before the countdown
+   ends.
+2. Perform the mouse and keyboard actions to reproduce.
+3. Press the configured recording stop key (F8 by default).
+4. Apply the result, inspect the generated nodes, and test it safely.
+
+Recording replaces the current graph. Use `Ctrl+Z` to restore the previous
+graph. Cursor movement is stored as compact movement sequences rather than a
+large number of individual nodes.
+
+## Window-relative coordinates
+
+1. Enter part of the target window title in a **Select window** node.
+2. Enable **Window-relative coordinates** in a coordinate-based node.
+3. X/Y values are calculated from the target window's top-left corner.
+
+This keeps actions aligned when the window moves to another position or
+monitor. Dynamic titles such as document names are matched using their stable
+portion.
+
+## Direct script launch
+
+Enable **Create launcher batch file** when saving a macro to create:
+
+```text
+scripts/<name>/
+├── <name>.json
+├── <name>.bat
+└── imgs/
+```
+
+Opening the batch file starts D5 Macro if needed, reuses it if already running,
+and executes the saved macro.
+
+## Supported nodes
+
+- Start, launch program, select/wait for window, coordinates, and wait
+- Find image and image condition
+- Mouse click, movement sequence, scroll, and drag
+- Keyboard input and loop
+
+## Development
+
+Python 3.11 and Node.js 22.12 or later are required.
 
 ```powershell
 pip install -r requirements.txt
 cd frontend
 npm ci
 npm run build
+python ../launcher.py
 ```
 
-## 실행
+The editor opens at <http://127.0.0.1:8000>. The server binds only to
+`127.0.0.1`.
 
-프런트엔드를 빌드한 뒤 실행합니다.
-
-```powershell
-python launcher.py
-```
-
-브라우저에서 <http://127.0.0.1:8000>을 엽니다.
-
-## 저장 매크로 바로 실행
-
-저장 창에서 **실행용 배치 파일 생성**을 선택하면 다음 구조로 저장됩니다.
-
-```text
-scripts/<이름>/
-├── <이름>.json
-├── <이름>.bat
-└── imgs/
-```
-
-생성된 배치 파일은 D5 Macro가 꺼져 있으면 시작하고, 켜져 있으면 재사용한 뒤 해당 매크로를 즉시 실행합니다.
-
-## 배포 빌드
+## Build
 
 ```powershell
 pip install -r requirements-build.txt
 .\build.ps1
 ```
 
-PyInstaller 앱은 `dist\D5Macro`에 생성됩니다. Inno Setup의 `iscc`가 설치되어 있으면 단일 설치 파일도 `release`에 생성됩니다. 판매 배포 전에는 설치 파일과 실행 파일을 동일한 인증서로 서명해야 합니다.
+PyInstaller output is written to `dist\D5Macro`. If Inno Setup `iscc` is
+available, the installer is written to `release`. Commercial releases should
+sign both the application and installer with the same Authenticode certificate.
 
-## 창 상대 좌표
-
-1. `창 선택` 노드에 대상 창 제목의 일부를 입력합니다.
-2. 좌표 노드에서 `창 기준 좌표`를 켭니다.
-3. X/Y는 대상 창 왼쪽 위를 `(0, 0)`으로 계산합니다.
-
-창을 다른 위치나 모니터로 옮겨도 같은 창 내부 위치를 조작할 수 있습니다.
-
-## 동작 녹화
-
-1. 상단 `녹화`를 누르고 3초 안에 대상 프로그램으로 전환합니다.
-2. 클릭·드래그·스크롤·키보드 입력을 수행합니다.
-3. `F8`을 눌러 종료한 뒤 결과를 적용합니다.
-
-녹화 결과는 현재 그래프를 교체하며 `Ctrl+Z`로 되돌릴 수 있습니다. 일반 마우스 이동은 기록하지 않습니다.
-
-## 노드
-
-- 시작, 프로그램 실행, 창 선택·대기, 좌표, 대기
-- 이미지 검색, 이미지 조건문
-- 마우스 클릭, 이동, 스크롤, 드래그
-- 키보드 입력, 반복문
-
-## 구조
+## Project structure
 
 ```text
-backend/   FastAPI API, 실행 엔진, 자동화 노드
-frontend/  React + Vite + React Flow 편집기
-branding/  프로그램 아이콘
-installer/ Inno Setup 설치 파일 정의
-legacy/    배포에서 제외한 구버전과 실험 코드
+backend/   FastAPI API, execution engine, and automation nodes
+frontend/  React, Vite, and React Flow editor
+branding/  Application icons
+installer/ Inno Setup definition
+imgs/      Current product screenshots and demonstrations
+legacy/    Obsolete versions and experiments excluded from releases
 ```
 
-서버는 기본적으로 `127.0.0.1:8000`에만 바인딩됩니다.
+## Privacy, security, and licensing
 
-## 저장소와 판매판
+- The app uses no remote account, advertising, or telemetry service.
+- Macros, captures, settings, and logs remain on the user's computer.
+- Saved macro JSON and generated batch files can launch programs and reproduce
+  input, so treat them like executable files.
+- Review [Privacy](./docs/PRIVACY.md), [Security](./SECURITY.md),
+  [Third-party notices](./docs/THIRD_PARTY_NOTICES.md), and
+  [LGPL compliance](./docs/LGPL_COMPLIANCE.md) before distribution.
+- Official binary source is preserved using matching version tags.
 
-- 공식 바이너리와 동일한 소스는 버전 태그로 보존합니다.
-- 구매 여부와 관계없이 이 저장소를 열람할 수 있지만, 자체 코드의 이용 조건은 [LICENSE](./LICENSE)를 따릅니다.
-- `pynput`, `pystray` 등 제3자 구성요소에는 각 프로젝트의 라이선스가 적용됩니다.
-- 개인정보 처리 방식은 [PRIVACY.md](./docs/PRIVACY.md), LGPL 배포 대응은 [LGPL_COMPLIANCE.md](./docs/LGPL_COMPLIANCE.md)를 확인하세요.
-- 보안 문제는 공개 이슈 대신 [비공개 보안 신고](./SECURITY.md)를 이용하세요.
+D5 Macro automates user-defined input. Test macros in a safe environment and
+do not use the software to bypass service rules, anti-cheat systems, access
+controls, or applicable law.
 
-## 안전 및 사용 책임
+The D5 Macro application code is **source-available** for portfolio and release
+transparency. Commercial use, resale, and redistribution require separate
+permission. Third-party components remain under their respective licenses.
 
-D5 Macro는 사용자가 지정한 마우스·키보드 입력을 재현하고 프로그램이나 URL을 실행할 수 있습니다. 저장하지 않은 작업의 손실, 의도하지 않은 입력 또는 대상 서비스의 이용약관 위반을 피하려면 먼저 안전한 테스트 환경에서 매크로를 검증하세요. 온라인 서비스·게임·업무 시스템의 정책을 우회하는 용도로 사용해서는 안 됩니다.
+## Contact
 
-## 라이선스
-
-D5 Macro 자체 코드는 포트폴리오와 릴리스 투명성을 위한 **source-available** 형태이며, 별도 허가 없는 상업적 이용·재판매·재배포를 허용하지 않습니다. LGPL 구성요소를 교체·수정·디버깅하기 위해 법적으로 필요한 권리는 제한하지 않습니다. 제3자 고지와 원문은 [THIRD_PARTY_NOTICES.md](./docs/THIRD_PARTY_NOTICES.md)를 참고하세요.
+Questions and support: [yanche2990@gmail.com](mailto:yanche2990@gmail.com)

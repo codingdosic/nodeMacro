@@ -8,9 +8,9 @@ builds should be updated before a report is reproduced.
 ## Reporting a vulnerability
 
 Please use [GitHub's private vulnerability report](https://github.com/codingdosic/nodeMacro/security/advisories/new).
-If that form is unavailable, open a public issue asking for a private contact
-channel without including reproduction details. Do not publish a vulnerability
-that could expose user data or allow unintended local actions.
+If that form is unavailable, email [yanche2990@gmail.com](mailto:yanche2990@gmail.com).
+Do not publish a vulnerability that could expose user data or allow unintended
+local actions.
 
 Include the D5 Macro version, Windows version, reproduction steps, expected
 impact, and whether the issue works without local user interaction. Remove

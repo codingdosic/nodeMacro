@@ -1,5 +1,6 @@
 import ctypes
 import math
+import os
 import sys
 import threading
 import time
@@ -21,16 +22,54 @@ TRANSIENT_WINDOW_CLASSES = {
     "sysshadow",
     "xamlexplorerhostislandwindow",
     "windows.ui.composition.desktopwindowcontentbridge",
+    "shell_traywnd",
+    "shell_secondarytraywnd",
+    "progman",
+    "workerw",
+    "dv2controlhost",
+}
+SHELL_PROCESSES = {
+    "searchapp.exe",
+    "searchhost.exe",
+    "shellexperiencehost.exe",
+    "startmenuexperiencehost.exe",
+    "textinputhost.exe",
 }
 WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_NOACTIVATE = 0x08000000
+MOVE_SAMPLE_INTERVAL = 0.05
+MOVE_SAMPLE_DISTANCE = 12
+HOVER_THRESHOLD = 0.25
 
 
-def _is_transient_window(class_name, ex_style):
+def _is_transient_window(class_name, ex_style, process_name=""):
+    class_key = str(class_name or "").casefold()
+    process_key = str(process_name or "").casefold()
     return (
-        str(class_name or "").casefold() in TRANSIENT_WINDOW_CLASSES
+        class_key in TRANSIENT_WINDOW_CLASSES
         or bool(int(ex_style or 0) & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE))
+        or process_key in SHELL_PROCESSES
     )
+
+
+def _process_name(hwnd):
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    handle = kernel32.OpenProcess(0x1000, False, pid.value)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return pid.value, ""
+    try:
+        size = wintypes.DWORD(32768)
+        path = ctypes.create_unicode_buffer(size.value)
+        if kernel32.QueryFullProcessImageNameW(handle, 0, path, ctypes.byref(size)):
+            return pid.value, os.path.basename(path.value)
+        return pid.value, ""
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def _window_info(hwnd):
@@ -41,8 +80,9 @@ def _window_info(hwnd):
     hwnd = user32.GetAncestor(hwnd, 2) or hwnd  # GA_ROOT
     class_name = ctypes.create_unicode_buffer(256)
     user32.GetClassNameW(hwnd, class_name, len(class_name))
+    pid, process_name = _process_name(hwnd)
     user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
-    if _is_transient_window(class_name.value, user32.GetWindowLongPtrW(hwnd, -20)):
+    if _is_transient_window(class_name.value, user32.GetWindowLongPtrW(hwnd, -20), process_name):
         return None
     length = user32.GetWindowTextLengthW(hwnd)
     if length <= 0:
@@ -55,6 +95,10 @@ def _window_info(hwnd):
     return {
         "title": title.value,
         "rect": [rect.left, rect.top, rect.right, rect.bottom],
+        "hwnd": int(hwnd),
+        "pid": int(pid),
+        "process": process_name,
+        "class_name": class_name.value,
     }
 
 
@@ -76,6 +120,8 @@ def _foreground_window():
 
 
 def _key_name(key):
+    if getattr(key, "vk", None) == 0x15:  # VK_HANGUL / VK_KANA
+        return "hangul"
     name = getattr(key, "name", None)
     if not name:
         return getattr(key, "char", None)
@@ -88,6 +134,10 @@ def _key_name(key):
 
 
 def _same_window(left, right):
+    left_hwnd = (left or {}).get("hwnd")
+    right_hwnd = (right or {}).get("hwnd")
+    if left_hwnd and right_hwnd:
+        return left_hwnd == right_hwnd
     return (left or {}).get("title") == (right or {}).get("title")
 
 
@@ -140,12 +190,18 @@ def events_to_steps(events):
     def use_window(window):
         nonlocal current_window
         title = (window or {}).get("title")
-        if title and title != current_window:
+        same_window = _same_window(window, current_window)
+        moved_or_resized = same_window and (window or {}).get("rect") != (current_window or {}).get("rect")
+        if title and (not same_window or moved_or_resized):
+            config = {"title": title, "timeout": 10, "poll_interval": 0.2, "activate": True}
+            for key in ("process", "class_name"):
+                if (window or {}).get(key):
+                    config[key] = window[key]
             steps.append({
                 "type": "window",
-                "config": {"title": title, "timeout": 10, "poll_interval": 0.2, "activate": True},
+                "config": config,
             })
-            current_window = title
+            current_window = window
 
     def coordinate(x, y, window):
         rect = (window or {}).get("rect")
@@ -222,6 +278,32 @@ def events_to_steps(events):
             if duration >= WAIT_THRESHOLD:
                 steps.append({"type": "wait", "config": {"ms": max(1, round(duration * 100) * 10)}})
             previous_end = end
+        elif event["kind"] == "move":
+            group = [event]
+            while index + 1 < len(events) and events[index + 1]["kind"] == "move":
+                index += 1
+                group.append(events[index])
+            sequence = []
+            previous_move_time = None
+            for item in group:
+                duration_ms = round(MOVE_SAMPLE_INTERVAL * 1000)
+                if previous_move_time is not None:
+                    gap = item["time"] - previous_move_time
+                    if gap >= HOVER_THRESHOLD:
+                        wait_ms = max(1, round((gap - MOVE_SAMPLE_INTERVAL) * 1000))
+                        sequence.append({"op": "wait", "ms": wait_ms})
+                    else:
+                        duration_ms = max(1, round(gap * 1000))
+                sequence.append({
+                    "op": "move", "x": int(item["x"]), "y": int(item["y"]),
+                    "duration_ms": duration_ms,
+                })
+                previous_move_time = item["time"]
+            steps.append({
+                "type": "mouse_sequence",
+                "config": {"coordinate_space": "screen", "steps": sequence},
+            })
+            previous_end = group[-1]["time"]
         index += 1
     return steps
 
@@ -241,6 +323,11 @@ class Recorder:
         self._downs = {}
         self._modifiers = set()
         self._pressed = set()
+        self._modifier_downs = {}
+        self._used_modifiers = set()
+        self._last_move_at = 0.0
+        self._last_move_pos = None
+        self._pending_move = None
 
     def _notify(self, phase, **payload):
         if self.callback:
@@ -257,20 +344,39 @@ class Recorder:
             self._downs.clear()
             self._modifiers.clear()
             self._pressed.clear()
+            self._modifier_downs.clear()
+            self._used_modifiers.clear()
+            self._last_move_at = 0.0
+            self._last_move_pos = None
+            self._pending_move = None
             self._cancel.clear()
         self._notify("countdown", seconds=delay)
         threading.Thread(target=self._begin_after_delay, args=(delay,), daemon=True).start()
         return True
 
     def _begin_after_delay(self, delay):
-        if self._cancel.wait(max(0, delay)):
-            return
+        deadline = time.monotonic() + max(0, delay)
+        shown = None
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            seconds_left = max(1, math.ceil(remaining))
+            if seconds_left != shown:
+                self._notify("countdown", seconds=seconds_left)
+                shown = seconds_left
+            if self._cancel.wait(min(0.1, remaining)):
+                return
         with self._lock:
             if not self.running:
                 return
             self.active = True
             self.started_at = time.monotonic()
-        self._mouse_listener = mouse.Listener(on_click=self._on_click, on_scroll=self._on_scroll)
+        self._mouse_listener = mouse.Listener(
+            on_move=self._on_move,
+            on_click=self._on_click,
+            on_scroll=self._on_scroll,
+        )
         self._keyboard_listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
         self._mouse_listener.start()
         self._keyboard_listener.start()
@@ -293,6 +399,7 @@ class Recorder:
         name = getattr(button, "name", str(button).split(".")[-1])
         now = time.monotonic()
         if pressed:
+            self._flush_pending_move()
             self._downs[name] = (now, int(x), int(y), _window_at(x, y))
             return
         down = self._downs.pop(name, None)
@@ -313,6 +420,7 @@ class Recorder:
             })
 
     def _on_scroll(self, x, y, dx, dy):
+        self._flush_pending_move()
         amount = dy or dx
         self._append({
             "kind": "scroll", "time": time.monotonic(), "amount": int(amount),
@@ -320,7 +428,36 @@ class Recorder:
             "x": int(x), "y": int(y), "window": _window_at(x, y),
         })
 
+    def _on_move(self, x, y):
+        if self._downs:
+            return
+        now = time.monotonic()
+        event = {"kind": "move", "time": now, "x": int(x), "y": int(y)}
+        if self._pending_move and now - self._pending_move["time"] >= HOVER_THRESHOLD:
+            self._flush_pending_move()
+        previous = self._last_move_pos
+        distance = math.hypot(x - previous[0], y - previous[1]) if previous else MOVE_SAMPLE_DISTANCE
+        if now - self._last_move_at < MOVE_SAMPLE_INTERVAL and distance < MOVE_SAMPLE_DISTANCE:
+            self._pending_move = event
+            return
+        self._append(event)
+        self._last_move_at = now
+        self._last_move_pos = (int(x), int(y))
+        self._pending_move = None
+
+    def _flush_pending_move(self):
+        event = self._pending_move
+        self._pending_move = None
+        if not event:
+            return
+        point = (event["x"], event["y"])
+        if point != self._last_move_pos:
+            self._append(event)
+            self._last_move_at = event["time"]
+            self._last_move_pos = point
+
     def _on_press(self, key):
+        self._flush_pending_move()
         name = _key_name(key)
         if name == get_setting("record_stop_key"):
             threading.Thread(target=self.stop, daemon=True).start()
@@ -329,10 +466,13 @@ class Recorder:
             return
         if name in MODIFIERS:
             self._modifiers.add(name)
+            self._modifier_downs[name] = (time.monotonic(), _foreground_window())
+            self._used_modifiers.discard(name)
             return
         if name in self._pressed:
             return
         self._pressed.add(name)
+        self._used_modifiers.update(self._modifiers)
         now = time.monotonic()
         window = _foreground_window()
         char = getattr(key, "char", None)
@@ -349,9 +489,15 @@ class Recorder:
     def _on_release(self, key):
         name = _key_name(key)
         self._pressed.discard(name)
+        if name in MODIFIERS and name not in self._used_modifiers:
+            started, window = self._modifier_downs.get(name, (time.monotonic(), _foreground_window()))
+            self._append({"kind": "hotkey", "time": started, "keys": [name], "window": window})
+        self._modifier_downs.pop(name, None)
+        self._used_modifiers.discard(name)
         self._modifiers.discard(name)
 
     def stop(self, drop_last_click=False):
+        self._flush_pending_move()
         with self._lock:
             if not self.running:
                 return False

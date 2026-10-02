@@ -1,5 +1,5 @@
 #define AppName "D5 Macro"
-#define AppVersion "1.0.0"
+#define AppVersion "1.0.5"
 #define AppPublisher "d051c"
 #define AppExeName "D5Macro.exe"
 

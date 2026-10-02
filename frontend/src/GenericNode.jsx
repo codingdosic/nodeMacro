@@ -490,11 +490,17 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
   const isCoordinateNode = data.type === 'click';
   const isKeyboardNode = data.type === 'keyboard';
   const isWindowNode = data.type === 'window';
+  const isMouseSequenceNode = data.type === 'mouse_sequence';
   const keyboardMode = config.mode ?? schema?.mode?.default ?? 'hotkey';
   const showOffsetPicker = data.type === 'image' && Boolean(config.image_url);
   const recordedKeys = Array.isArray(config.keys)
     ? config.keys
     : String(config.keys || '').split(',').map((item) => item.trim()).filter(Boolean);
+  const mouseSequenceSteps = Array.isArray(config.steps) ? config.steps : [];
+  const mouseSequenceMoves = mouseSequenceSteps.filter((step) => step?.op === 'move').length;
+  const mouseSequenceWaitMs = mouseSequenceSteps
+    .filter((step) => step?.op === 'wait')
+    .reduce((total, step) => total + (Number(step.ms) || 0), 0);
 
   const naturalSize = getImageNaturalSize();
   const markerStyle = showOffsetPicker
@@ -568,6 +574,14 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
         )}
 
         {isWindowNode && <div className="node-hint">{t('windowNodeHint')}</div>}
+
+        {isMouseSequenceNode && (
+          <div className="node-hint">
+            {t('mouseSequenceSummary')
+              .replace('{moves}', mouseSequenceMoves)
+              .replace('{seconds}', (mouseSequenceWaitMs / 1000).toFixed(1))}
+          </div>
+        )}
 
         {isCoordinateNode && (
           <div className="node-section">
@@ -677,7 +691,7 @@ const GenericNode = ({ id, data, isConnectable, selected }) => {
           </div>
         )}
 
-        {!hasSchema && !isImageNode && !isCoordinateNode && !isKeyboardNode && (
+        {!hasSchema && !isImageNode && !isCoordinateNode && !isKeyboardNode && !isMouseSequenceNode && (
           <div className="node-label" style={{ textAlign: 'center', color: '#64748b' }}>
             {t('noConfiguration')}
           </div>

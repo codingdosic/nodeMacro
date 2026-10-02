@@ -1,6 +1,6 @@
 import unittest
 
-from backend.nodes.action_nodes import ImageNode, LaunchNode, MouseClickNode, StartNode, WaitNode
+from backend.nodes.action_nodes import ImageNode, LaunchNode, MouseClickNode, MouseSequenceNode, StartNode, WaitNode
 from backend.validation import validate_macro
 
 
@@ -10,6 +10,7 @@ NODE_MAP = {
     "wait": WaitNode,
     "image": ImageNode,
     "mouse_click": MouseClickNode,
+    "mouse_sequence": MouseSequenceNode,
 }
 
 
@@ -52,6 +53,15 @@ class ValidationTests(unittest.TestCase):
         links = [{"source": "start", "target": "launch"}]
         codes = {issue["code"] for issue in validate_macro(nodes, links, NODE_MAP)}
         self.assertIn("launch_path", codes)
+
+    def test_invalid_mouse_sequence_is_an_error(self):
+        nodes = {
+            "start": {"type": "start", "config": {}},
+            "path": {"type": "mouse_sequence", "config": {"steps": [{"op": "move", "x": 1}]}},
+        }
+        links = [{"source": "start", "target": "path"}]
+        codes = {issue["code"] for issue in validate_macro(nodes, links, NODE_MAP)}
+        self.assertIn("invalid_mouse_sequence", codes)
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ import {
 import { api, websocketUrl } from './api';
 import GenericNode from './GenericNode';
 import { emitNodeUpdate } from './nodeUpdateBus';
-import { nodeLabel, t } from './i18n';
+import { fieldLabel, nodeLabel, t } from './i18n';
 import { DRAFT_KEY, graphFingerprint, makeDraft, parseDraft } from './draft';
 
 const nodeTypes = {
@@ -32,6 +32,11 @@ const syncIdCounter = (nodeList) => {
   });
   id = next;
 };
+
+const formatTemplate = (message, params = {}) => Object.entries(params).reduce(
+  (text, [key, value]) => text.replaceAll(`{${key}}`, String(value)),
+  message,
+);
 
 const isEditableTarget = (target) => {
   if (!target || !(target instanceof Element)) {
@@ -192,6 +197,48 @@ const NodeEditor = ({ currentLanguage, onLanguageChange }) => {
     .replace('{recordStop}', appSettings.record_stop_key.toUpperCase())
     .replace('{panicStop}', appSettings.panic_stop_key.toUpperCase());
 
+  const localizeBackendMessage = useCallback((message) => {
+    if (!message || currentLanguage !== 'en') return message;
+    const exact = {
+      "창 기준 좌표에 필요한 '창 선택' 노드가 실행되지 않았습니다.": 'A Select window node must run before using window-relative coordinates.',
+      '마우스 이동 기록이 비어 있습니다.': 'The recorded mouse movement is empty.',
+      '마우스 이동 기록이 너무 깁니다.': 'The recorded mouse movement is too long.',
+      '마우스 이동 기록 형식이 올바르지 않습니다.': 'The recorded mouse movement has an invalid format.',
+      '마우스 이동 기록에 잘못된 수치가 있습니다.': 'The recorded mouse movement contains an invalid value.',
+    };
+    if (exact[message]) return exact[message];
+    let match = /^프로그램 또는 파일을 실행하지 못했습니다: (.+)$/.exec(message);
+    if (match) return `Could not launch the program or file: ${match[1]}`;
+    match = /^(\S+)초 안에 창을 찾을 수 없습니다: (.*)$/.exec(message);
+    if (match) return `Could not find the window within ${match[1]}s: ${match[2]}`;
+    match = /^이미지 탐색 오류: (.+)$/.exec(message);
+    if (match) return `Image search error: ${match[1]}`;
+    return message;
+  }, [currentLanguage]);
+
+  const localizeValidationIssue = useCallback((issue) => {
+    if (currentLanguage !== 'en') return issue.message;
+    const [code, field] = String(issue.code || '').split(':');
+    const fieldName = field ? fieldLabel(field, field) : '';
+    const translations = {
+      unsupported_node: 'This node type is not supported.', invalid_config: 'The node configuration is invalid.',
+      invalid_option: `The selected value for '${fieldName}' is invalid.`, invalid_number: `'${fieldName}' must be a number.`,
+      number_min: `'${fieldName}' is below its minimum value.`, number_max: `'${fieldName}' is above its maximum value.`,
+      window_title: 'Enter a window title.', launch_path: 'Enter a file, document, or URL to launch.',
+      launch_missing: 'The file or document to launch could not be found.', image_required: 'Capture or select an image to find.',
+      image_missing: 'The image file could not be found.', empty_keyboard: 'The key or text input is empty.',
+      empty_mouse_sequence: 'The recorded mouse movement is empty.', mouse_sequence_too_long: 'The recorded mouse movement is too long.',
+      invalid_mouse_sequence: 'The recorded mouse movement is invalid.', start_count: 'A macro must contain exactly one Start node.',
+      invalid_link: 'The connection data is invalid.', broken_link: 'A connection points to a missing node.',
+      invalid_output: 'An output connection does not match its node type.', duplicate_output: 'An output pin has more than one connection.',
+      unreachable: 'This node cannot be reached from the Start node.', empty_macro: 'The Start node is not connected to another node.',
+      missing_position: 'No preceding coordinate or image is set, so the previous pointer position may be used.',
+      missing_window: 'A Select window node is required before window-relative coordinates.',
+      cycle_without_loop: 'A cycle without a Loop node may run indefinitely.',
+    };
+    return translations[code] || issue.message;
+  }, [currentLanguage]);
+
   const tutorialPages = [
     { title: t('tutorialCreateTitle'), body: t('tutorialCreateBody'), items: [t('tutorialCreateRecord'), t('tutorialCreateNodes')] },
     { title: t('tutorialFlowTitle'), body: t('tutorialFlowBody'), items: [t('tutorialFlowExample'), t('tutorialFlowHint')] },
@@ -350,9 +397,13 @@ const NodeEditor = ({ currentLanguage, onLanguageChange }) => {
       ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
       if (data.type === 'status') {
-        setStatus(data.message);
-        if (!data.message?.startsWith('실행 중:') && !data.message?.includes('대기 중...')) {
-          appendLog(data.message, data.message?.includes('오류') ? 'error' : 'info');
+        const params = { ...data.params };
+        if (params.node_type) params.node = nodeLabel(params.node_type, params.node_type);
+        if (params.error) params.error = localizeBackendMessage(params.error);
+        const message = data.key ? formatTemplate(t(data.key), params) : localizeBackendMessage(data.message);
+        setStatus(message);
+        if (!['status_running_node', 'status_window_waiting', 'status_next_action'].includes(data.key)) {
+          appendLog(message, data.key === 'status_macro_error' ? 'error' : 'info');
         }
       } else if (data.type === 'execution') {
         if (data.phase === 'reset') {
@@ -364,7 +415,7 @@ const NodeEditor = ({ currentLanguage, onLanguageChange }) => {
         } else {
           const node = nodesRef.current.find((item) => item.id === data.node_id);
           const label = nodeLabel(node?.data?.type, node?.data?.label || data.node_id);
-          appendLog(`${label}: ${t(`phase_${data.phase}`)}${data.message ? ` — ${data.message}` : ''}`, data.phase === 'error' ? 'error' : data.phase);
+          appendLog(`${label}: ${t(`phase_${data.phase}`)}${data.message ? ` — ${localizeBackendMessage(data.message)}` : ''}`, data.phase === 'error' ? 'error' : data.phase);
         }
         setNodes((nds) => nds.map((node) => {
           if (data.phase === 'reset') {
@@ -376,7 +427,7 @@ const NodeEditor = ({ currentLanguage, onLanguageChange }) => {
               data: {
                 ...node.data,
                 executionState: data.phase,
-                executionMessage: data.message || null,
+                executionMessage: localizeBackendMessage(data.message) || null,
               },
             };
           }
@@ -385,7 +436,7 @@ const NodeEditor = ({ currentLanguage, onLanguageChange }) => {
       } else if (data.type === 'recorder') {
         if (data.phase === 'countdown') {
           setRecordingPhase('countdown');
-          setStatus(t('recordCountdown'));
+          setStatus(t('recordCountdownValue').replace('{seconds}', Math.ceil(Number(data.seconds) || 0)));
           setContextMenu(null);
         } else if (data.phase === 'started') {
           setRecordingPhase('recording');
@@ -506,7 +557,7 @@ const NodeEditor = ({ currentLanguage, onLanguageChange }) => {
       window.clearTimeout(reconnectTimer);
       ws?.close();
     };
-  }, [setNodes, appendLog]);
+  }, [setNodes, appendLog, localizeBackendMessage]);
 
   const handleLanguageChange = (event) => {
     const wasIdle = status === t('idle');
@@ -914,7 +965,7 @@ const NodeEditor = ({ currentLanguage, onLanguageChange }) => {
     const showValidationIssues = (issues) => {
       const issueByNode = new Map();
       (issues || []).forEach((issue) => {
-        appendLog(`${issue.level === 'error' ? t('validationError') : t('validationWarning')}: ${issue.message}`, issue.level);
+        appendLog(`${issue.level === 'error' ? t('validationError') : t('validationWarning')}: ${localizeValidationIssue(issue)}`, issue.level);
         if (issue.node_id && (issue.level === 'error' || !issueByNode.has(issue.node_id))) {
           issueByNode.set(issue.node_id, issue);
         }
@@ -926,7 +977,7 @@ const NodeEditor = ({ currentLanguage, onLanguageChange }) => {
           data: {
             ...node.data,
             executionState: issue?.level || null,
-            executionMessage: issue?.message || null,
+            executionMessage: issue ? localizeValidationIssue(issue) : null,
           },
         };
       }));
@@ -1184,6 +1235,26 @@ const NodeEditor = ({ currentLanguage, onLanguageChange }) => {
     }
   };
 
+  const deleteSelectedScript = async () => {
+    const selected = loadDialog?.selected;
+    if (!selected || !window.confirm(t('deleteScriptConfirm').replace('{name}', selected))) {
+      return;
+    }
+    try {
+      const res = await api.post('/scripts/delete', { path: selected });
+      if (res.data.status !== 'deleted') {
+        alert(res.data.message || t('deleteScriptFailed'));
+        return;
+      }
+      const files = loadDialog.files.filter((file) => file !== selected);
+      setStatus(`${t('deleted')}: ${selected}`);
+      setLoadDialog(files.length ? { files, selected: files[0] } : null);
+    } catch (error) {
+      console.error(error);
+      alert(error.response?.data?.message || t('deleteScriptFailed'));
+    }
+  };
+
   return (
     <div className={`editor-container${isLocked ? ' graph-locked' : ''}`} ref={reactFlowWrapper}>
       <div className="topbar">
@@ -1326,6 +1397,9 @@ const NodeEditor = ({ currentLanguage, onLanguageChange }) => {
               </select>
             </label>
             <p className="editor-modal-hint">{t('hotkeySettingsHint')}</p>
+            <p className="editor-modal-hint">
+              {t('developerContact')}: <a href="mailto:yanche2990@gmail.com">yanche2990@gmail.com</a>
+            </p>
             <div className="editor-modal-actions">
               <button type="button" onClick={() => setSettingsDialog(null)}>{t('cancel')}</button>
               <button type="button" className="primary" onClick={saveAppSettings}>{t('save')}</button>
@@ -1449,6 +1523,7 @@ const NodeEditor = ({ currentLanguage, onLanguageChange }) => {
               </select>
             </label>
             <div className="editor-modal-actions">
+              <button type="button" className="danger" onClick={deleteSelectedScript}>{t('delete')}</button>
               <button type="button" onClick={() => setLoadDialog(null)}>{t('cancel')}</button>
               <button type="button" className="primary" onClick={confirmLoad}>{t('load')}</button>
             </div>

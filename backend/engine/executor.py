@@ -32,14 +32,14 @@ class Executor:
         if self.running:
             return False
 
-        state.update_status("매크로 준비 중...")
+        state.update_status("매크로 준비 중...", "status_macro_preparing")
 
         start_node = all_nodes_dict.get(start_node_id) if start_node_id else None
         if not start_node:
             start_node = next((node for node in all_nodes_dict.values() if node.node_type == "start"), None)
 
         if not start_node:
-            state.update_status("시작 노드가 없습니다.")
+            state.update_status("시작 노드가 없습니다.", "status_start_missing")
             return False
 
         self.running = True
@@ -57,7 +57,7 @@ class Executor:
     def stop(self):
         self._stop_requested = True
         state.stop_event.set()
-        state.update_status("매크로 중단됨")
+        state.update_status("매크로 중단됨", "status_macro_stopped")
 
     def close(self):
         self.stop()
@@ -74,19 +74,23 @@ class Executor:
             current_node = start_node
             while current_node and not self._stop_requested:
                 state.update_execution(current_node.node_id, "running")
-                state.update_status(f"실행 중: {current_node.label}")
+                state.update_status(
+                    f"실행 중: {current_node.label}",
+                    "status_running_node",
+                    node_type=current_node.node_type,
+                )
                 next_pin_id = current_node.execute(state.macro_state)
                 state.update_execution(current_node.node_id, "completed")
                 next_node = self._get_next_node(current_node, all_nodes_dict, all_links, next_pin_id)
                 if not next_node:
-                    state.update_status("매크로 완료")
+                    state.update_status("매크로 완료", "status_macro_complete")
                     print("더 이상 연결된 노드가 없습니다. 실행 종료.")
                     break
                 current_node = next_node
                 state.stop_event.wait(0.01)
         except Exception as exc:
             state.update_execution(current_node.node_id if current_node else None, "error", str(exc))
-            state.update_status(f"매크로 오류: {exc}")
+            state.update_status(f"매크로 오류: {exc}", "status_macro_error", error=str(exc))
             print(f"매크로 실행 오류: {exc}")
         finally:
             self.running = False

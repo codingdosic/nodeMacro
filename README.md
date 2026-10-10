@@ -53,3 +53,8 @@ For problems, feature suggestions, or other questions, contact [yanche2990@gmail
 ## About this repository
 
 This public repository contains the product introduction and demo media. Application source code is maintained separately in a private development repository. This repository does not provide application installers or build instructions.
+
+## License terms
+
+D5 Macro is licensed to one user for personal or business automation.
+Please review the [full end-user license agreement for version 1.0.9](docs/TERMS-1.0.9.md) before purchasing. Third-party license rights remain unaffected.

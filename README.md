@@ -2,6 +2,8 @@
 
 Build custom Windows macros by connecting nodes, without writing code.
 
+**[Buy D5 Macro on Lemon Squeezy](https://d051c-macro.lemonsqueezy.com/checkout/buy/3efc95b4-a74f-4df1-b435-f2e1a44579d6)** · [License terms](docs/TERMS-1.0.9.md)
+
 ![D5 Macro visual editor](imgs/overview.png)
 
 D5 Macro combines a visual node editor with mouse and keyboard recording. Start with a recorded workflow, then add image recognition, conditions, and other nodes to make it more adaptable.

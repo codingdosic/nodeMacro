@@ -1,8 +1,10 @@
 # D5 Macro
 
+<img src="imgs/d5macro-icon.png" alt="D5 Macro icon" width="96" height="96" />
+
 Build custom Windows macros by connecting nodes, without writing code.
 
-**[Buy D5 Macro on Lemon Squeezy](https://d051c-macro.lemonsqueezy.com/checkout/buy/3efc95b4-a74f-4df1-b435-f2e1a44579d6)** · [License terms](docs/TERMS-1.0.9.md)
+**[Buy D5 Macro on Lemon Squeezy](https://d051c-macro.lemonsqueezy.com/checkout/buy/3efc95b4-a74f-4df1-b435-f2e1a44579d6)** · [License terms](docs/TERMS-1.0.13.md)
 
 ![D5 Macro visual editor](imgs/overview.png)
 
@@ -17,6 +19,15 @@ D5 Macro combines a visual node editor with mouse and keyboard recording. Start 
 - **Live feedback:** follow the current action and review execution logs.
 - **Reusable scripts:** save and load JSON scripts, and optionally create a batch launcher to run a saved script.
 - **English and Korean interface:** choose your preferred UI language.
+
+## Recent improvements (1.0.10–1.0.13)
+
+- Resize individual nodes to make complex workflows easier to read.
+- New drag recordings preserve the held-button movement path, enabling workflows such as drawing.
+- Window selection supports picking an open window, named window references, and targeting windows opened during the current run. Ambiguous matches prompt for a choice instead of silently choosing a different window.
+- Refreshed application, installer, tray, and browser-tab icons.
+
+Older recordings do not gain information that was never captured. Re-record relevant actions to use the newer drag-path and window-reference behavior. Browser tabs inside one window are not selected through a browser DOM integration; record or configure the necessary tab-switching actions.
 
 ## See it in action
 
@@ -59,4 +70,4 @@ This public repository contains the product introduction and demo media. Applica
 ## License terms
 
 D5 Macro is licensed to one user for personal or business automation.
-Please review the [full end-user license agreement for version 1.0.9](docs/TERMS-1.0.9.md) before purchasing. Third-party license rights remain unaffected.
+Please review the [full end-user license agreement for version 1.0.13](docs/TERMS-1.0.13.md) before purchasing. Third-party license rights remain unaffected.

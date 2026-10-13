@@ -1,3 +1,5 @@
+> Historical license document for the earlier D5 Macro release. For Nodetavi Macro 1.0.19, see the [current license terms](TERMS.md).
+
 # D5 Macro End-User License Agreement
 
 Applies to D5 Macro 1.0.9.

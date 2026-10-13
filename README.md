@@ -1,35 +1,37 @@
-# D5 Macro
+# Nodetavi Macro
 
-<img src="imgs/d5macro-icon.png" alt="D5 Macro icon" width="96" height="96" />
+<img src="imgs/nodetavi-icon.png" alt="Nodetavi Macro icon" width="96" height="96" />
 
-Build custom Windows macros by connecting nodes, without writing code.
+**No-Code Windows Automation**
 
-**[Buy D5 Macro on Lemon Squeezy](https://d051c-macro.lemonsqueezy.com/checkout/buy/3efc95b4-a74f-4df1-b435-f2e1a44579d6)** · [License terms](docs/TERMS-1.0.13.md)
+Turn repetitive Windows tasks into reusable workflows. Connect visual nodes to control mouse and keyboard actions, or record your actions and refine the resulting workflow without writing code.
 
-![D5 Macro visual editor](imgs/overview.png)
+**[Get Nodetavi Macro on Lemon Squeezy](https://d051c-macro.lemonsqueezy.com/checkout/buy/3efc95b4-a74f-4df1-b435-f2e1a44579d6)** · [License terms](docs/TERMS.md) · [Privacy](docs/PRIVACY.md)
 
-D5 Macro combines a visual node editor with mouse and keyboard recording. Start with a recorded workflow, then add image recognition, conditions, and other nodes to make it more adaptable.
+This overview describes the prepared 1.0.19 build. Check the store for the version currently available to download. The store listing and older demonstration media may still show the previous D5 Macro name while the rename is being rolled out.
+
+![Visual workflow editor, earlier interface](imgs/overview.png)
 
 ## Features
 
-- **Visual node editor:** connect actions to build and edit your workflow.
-- **Mouse and keyboard automation:** record and replay actions, or configure individual nodes.
-- **Image recognition and branching:** respond to matching images and condition results rather than relying only on fixed delays.
-- **Multi-monitor support:** automate across screens, with window-relative coordinates where appropriate.
-- **Live feedback:** follow the current action and review execution logs.
-- **Reusable scripts:** save and load JSON scripts, and optionally create a batch launcher to run a saved script.
-- **English and Korean interface:** choose your preferred UI language.
+- **Visual workflow editor:** connect actions, waits, conditions, and loops. Resize nodes and insert new steps into existing connections.
+- **Recording and playback:** capture mouse movements, clicks, held-button drag paths, scrolling, and keyboard input, then refine the generated nodes.
+- **Image matching and branching:** use reference images to guide actions or choose branches. Test recognition against the current screen and inspect similarity scores.
+- **Window selection:** pick an open window or configure matching criteria. Named references and current-run window targeting help distinguish multiple windows; ambiguous matches ask you to choose.
+- **Workflow organization:** name and search nodes by name or ID, group related nodes, edit a group's contents, and save groups for reuse.
+- **Execution and troubleshooting:** follow the active node, review current and recent run logs, and jump from a log entry to the relevant node.
+- **Reusable scripts:** save and load JSON workflows, save changes to the loaded file, or create a separate copy with Save As.
+- **Batch launchers:** optionally create a desktop launcher that starts the app if needed and runs the saved workflow.
+- **Multi-monitor support:** use screen coordinates or window-relative coordinates.
+- **English and Korean interface.**
 
-## Recent improvements (1.0.10–1.0.13)
+## Getting started
 
-- Resize individual nodes to make complex workflows easier to read.
-- New drag recordings preserve the held-button movement path, enabling workflows such as drawing.
-- Window selection supports picking an open window, named window references, and targeting windows opened during the current run. Ambiguous matches prompt for a choice instead of silently choosing a different window.
-- Refreshed application, installer, tray, and browser-tab icons.
+Install Nodetavi Macro, open the browser-based editor, and follow the built-in tutorial. No separate Python or Node.js installation is required. This is a locally installed Windows application, not a cloud automation service.
 
-Older recordings do not gain information that was never captured. Re-record relevant actions to use the newer drag-path and window-reference behavior. Browser tabs inside one window are not selected through a browser DOM integration; record or configure the necessary tab-switching actions.
+## Demonstrations
 
-## See it in action
+These screenshots and GIFs show an earlier interface. Labels and layout may differ from the current build.
 
 ### Create and connect nodes
 
@@ -37,37 +39,41 @@ Older recordings do not gain information that was never captured. Re-record rele
 
 ### Capture an image and move the pointer to a match
 
-![Image capture and recognition](imgs/capture.gif)
+![Image capture and matching](imgs/capture.gif)
 
 ### Record and replay typing
 
 ![Recording keyboard input and replaying it in Notepad](imgs/recording.gif)
 
-### Get started with the tutorial
-
-![Built-in tutorial](imgs/tutorial.png)
-
 ## Before you buy
 
-- **Platform:** Windows 10 or 11, 64-bit. The installed application runs locally and opens its editor in a browser. A separate Python or Node.js installation is not required.
-- **Browser testing:** Chrome is the currently verified browser. Other browsers have not been fully tested.
-- **Replay limitations:** window positions, display settings, browser zoom, page layout, and loading times can affect recorded actions. Image matching also depends on the target's appearance. Test workflows before using them for important tasks.
-- **Permissions:** automation of elevated applications, protected software, or games is not guaranteed.
-- **Installer signing:** the current installer is unsigned. Windows may display an unknown-publisher or SmartScreen warning.
-- **Batch launchers:** a launcher can be moved to another folder on the same PC, but its referenced script and application must remain available.
-- **Updates:** further improvements are planned. Please base your purchase on the features currently available.
+- **Platform:** Windows 10 or 11, 64-bit. macOS and Linux are not supported.
+- **Browser testing:** the editor and website automation have been tested in Google Chrome. Other browsers have not been fully verified.
+- **Coordinates:** display settings, window sizes, browser zoom, page layout, and loading times can affect playback. Window-relative coordinates compensate for window position, not changes in content layout.
+- **Image matching:** appearance, scale, colors, and selection states can affect recognition. Reference images and similarity thresholds may need adjustment. This is image matching, not OCR.
+- **Timing:** recording does not guarantee that a website or application has finished loading. Use image checks or appropriate waits.
+- **Permissions:** elevated applications, protected software, and some games may restrict automated input.
+- **IME input:** recording captures keyboard events, not finalized IME text. For Korean, Japanese, Chinese, or other IME input, review the recording and use text nodes where needed.
+- **Windows and tabs:** selecting an application window does not directly select a browser tab. Configure or record tab-switching actions.
+- **Older recordings:** information that was never captured cannot be recovered. Re-record relevant actions to use newer drag-path and window-reference behavior.
+- **Installer signing:** the installer is unsigned. Windows may display an unknown-publisher or SmartScreen warning.
+- **Batch launchers:** launchers can be moved on the same PC, but referenced scripts and the application must remain at their expected paths.
+- **Updates:** purchase based on the features available today, rather than anticipated updates.
 
-## Support and feedback
+Always test workflows in a safe environment before using them on important files or accounts. Only run scripts and batch files from sources you trust. Use automation where you have permission and where it complies with the target service's rules.
 
-Developed by **d051c**.
+## Support
 
-For problems, feature suggestions, or other questions, contact [yanche2990@gmail.com](mailto:yanche2990@gmail.com). Please include your application version and relevant logs when reporting a problem. Remove private information before sharing scripts or screenshots.
+Independently developed by **d051c**.
+
+Contact [yanche2990@gmail.com](mailto:yanche2990@gmail.com) for bug reports, suggestions, or questions. Include your app version, Windows version, and relevant logs. Remove sensitive information before sharing scripts, logs, or screenshots.
 
 ## About this repository
 
-This public repository contains the product introduction and demo media. Application source code is maintained separately in a private development repository. This repository does not provide application installers or build instructions.
+This public repository contains product information and demonstration media. Application source code is maintained separately in a private development repository. This repository does not provide application installers or build instructions. The repository URL is retained so existing external links continue to work.
 
-## License terms
+## License and third-party components
 
-D5 Macro is licensed to one user for personal or business automation.
-Please review the [full end-user license agreement for version 1.0.13](docs/TERMS-1.0.13.md) before purchasing. Third-party license rights remain unaffected.
+A purchase licenses one user for personal or business automation on devices they control. Redistribution or resale of the application is not permitted. Rights under third-party open-source licenses remain unaffected.
+
+Review the [full license terms](docs/TERMS.md) before purchasing. See the [third-party notices](docs/THIRD_PARTY_NOTICES.md) and [LGPL library replacement guide](docs/LGPL_COMPLIANCE.md) for component-specific rights and instructions.

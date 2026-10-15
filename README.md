@@ -8,6 +8,18 @@ Turn repetitive Windows tasks into reusable workflows. Connect visual nodes to c
 
 **[Get Nodetavi Macro on Lemon Squeezy](https://d051c-macro.lemonsqueezy.com/checkout/buy/3efc95b4-a74f-4df1-b435-f2e1a44579d6)** · [License terms](docs/TERMS.md) · [Privacy](docs/PRIVACY.md)
 
+## Try the free demo
+
+**[Download Nodetavi Macro Demo for Windows](https://github.com/codingdosic/nodeMacro/releases/tag/demo-v1.0.19)** | [Direct installer download](https://github.com/codingdosic/nodeMacro/releases/download/demo-v1.0.19/NodetaviMacroDemo-Setup-1.0.19.exe)
+
+Try visual workflows, image matching, conditions, loops and execution logs before purchasing. **Up to 50 action nodes**, including Start and nodes inside groups; visual group containers do not count.
+
+**Demo exclusions:** input recording, workflow saving/loading, browser draft recovery, saved-group import/export and batch launchers. **Refreshing or closing the editor discards your workflow.** Settings, logs and reference-image captures can remain locally. In-session grouping, undo and copy/paste remain available.
+
+Requires **Windows 10/11 x64**; Chrome is the tested editor browser. The unsigned installer may trigger a Windows SmartScreen or unknown-publisher warning. The demo installs separately from the full edition. Evaluation terms, privacy information, checksums and third-party component sources are included on the [demo release page](https://github.com/codingdosic/nodeMacro/releases/tag/demo-v1.0.19).
+
+## Full edition
+
 This overview describes the prepared 1.0.19 build. Check the store for the version currently available to download. The store listing and older demonstration media may still show the previous D5 Macro name while the rename is being rolled out.
 
 ![Visual workflow editor, earlier interface](imgs/overview.png)
@@ -70,7 +82,7 @@ Contact [yanche2990@gmail.com](mailto:yanche2990@gmail.com) for bug reports, sug
 
 ## About this repository
 
-This public repository contains product information and demonstration media. Application source code is maintained separately in a private development repository. This repository does not provide application installers or build instructions. The repository URL is retained so existing external links continue to work.
+This public repository contains product information and demonstration media. Application source code is maintained separately in a private development repository. A free evaluation installer is available through this repository's Releases; full-edition downloads are provided through the store. This repository does not provide application build instructions. The repository URL is retained so existing external links continue to work.
 
 ## License and third-party components
 
